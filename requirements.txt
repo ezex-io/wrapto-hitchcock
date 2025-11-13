@@ -1,0 +1,3 @@
+pactus-sdk @ git+https://github.com/pactus-project/python-sdk.git
+eth-account>=0.13.7
+
