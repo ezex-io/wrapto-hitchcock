@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 
 class HitchcockCLI:
@@ -12,7 +12,9 @@ class HitchcockCLI:
         self.actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Generate private key", self.generate_private_key),
             "2": ("Get Address from Private key", self.get_address_from_private_key),
-            "3": ("Create and Sign Wrap Transaction (PAC->WAPC)", self.create_wrap_transaction),
+            "3": ("Create and Sign Wrap Transaction (PAC->wPAC)", self.create_wrap_transaction),
+            "4": ("Show PAC Info", self.show_pac_info),
+            "5": ("Show wPAC Info", self.show_wpac_info),
             "0": ("Exit", self.exit_program),
         }
         self.should_exit = False
@@ -202,6 +204,246 @@ class HitchcockCLI:
             return
 
         input("\nPress Enter to return to the main menu...")
+
+    def show_pac_info(self) -> None:
+        """Show PAC (Pactus blockchain native coin) information."""
+        # First question: Mainnet or Testnet
+        environment = self.prompt_choice(
+            "Select network environment",
+            ["Mainnet", "Testnet"],
+        )
+        is_testnet = environment.lower().startswith("test")
+
+        try:
+            from pactus.crypto import hrp as pactus_hrp
+            from pactus.client import Client
+
+            # Set HRP based on network
+            original_hrp = (
+                pactus_hrp.HRP.ADDRESS_HRP,
+                pactus_hrp.HRP.PUBLIC_KEY_HRP,
+                pactus_hrp.HRP.PRIVATE_KEY_HRP,
+            )
+
+            try:
+                if is_testnet:
+                    pactus_hrp.HRP.use_testnet()
+                    # Default testnet RPC endpoint
+                    rpc_endpoint = "https://testnet-api.pactus.org"
+                else:
+                    pactus_hrp.HRP.ADDRESS_HRP = "pc"
+                    pactus_hrp.HRP.PUBLIC_KEY_HRP = "public"
+                    pactus_hrp.HRP.PRIVATE_KEY_HRP = "secret"
+                    # Default mainnet RPC endpoint
+                    rpc_endpoint = "https://api.pactus.org"
+
+                # Connect to Pactus client
+                client = Client(rpc_endpoint)
+
+                # Get blockchain info
+                blockchain_info = client.get_blockchain_info()
+                network_info = client.get_network_info()
+
+                # Display PAC info
+                self.print_pac_info(environment, blockchain_info, network_info)
+
+            finally:
+                (
+                    pactus_hrp.HRP.ADDRESS_HRP,
+                    pactus_hrp.HRP.PUBLIC_KEY_HRP,
+                    pactus_hrp.HRP.PRIVATE_KEY_HRP,
+                ) = original_hrp
+
+        except Exception as e:
+            self.warn(f"Failed to fetch PAC info: {e}")
+            return
+
+        input("\nPress Enter to return to the main menu...")
+
+    def print_pac_info(
+        self,
+        environment: str,
+        blockchain_info: Any,
+        network_info: Any,
+    ) -> None:
+        """Print PAC (Pactus blockchain) information."""
+        print()
+        print(f"[PAC Info] Pactus Blockchain ({environment})")
+
+        try:
+            if hasattr(blockchain_info, "total_accounts"):
+                print(f"Total Accounts: {blockchain_info.total_accounts}")
+            if hasattr(blockchain_info, "total_validators"):
+                print(f"Total Validators: {blockchain_info.total_validators}")
+            if hasattr(blockchain_info, "current_block_height"):
+                print(f"Current Block Height: {blockchain_info.current_block_height}")
+            if hasattr(blockchain_info, "total_power"):
+                print(f"Total Power: {blockchain_info.total_power}")
+
+            if hasattr(network_info, "connected_peers"):
+                print(f"Connected Peers: {network_info.connected_peers}")
+            if hasattr(network_info, "network_name"):
+                print(f"Network: {network_info.network_name}")
+
+        except Exception as e:
+            self.warn(f"Error displaying PAC info: {e}")
+
+    def show_wpac_info(self) -> None:
+        """Show wPAC (ERC-20 token) information."""
+        import config
+        from web3 import Web3
+
+        # First question: Mainnet or Testnet
+        environment = self.prompt_choice(
+            "Select network environment",
+            ["Mainnet", "Testnet"],
+        )
+        env_key = "mainnet" if environment.lower().startswith("main") else "testnet"
+
+        # Get available contracts and build list (only wPAC contracts)
+        contract_options = []
+        contract_map = {}  # Maps display name to (contract_name, network)
+
+        # Only show wPAC contracts
+        contract_name = "wpac"
+        for network in config.list_networks():
+            address = config.get_contract_address(contract_name, network, env_key)
+            if address:
+                # Format display name: "wPAC on Polygon", "wPAC on BSC", etc.
+                display_name = f"wPAC on {network.capitalize()}"
+                contract_options.append(display_name)
+                contract_map[display_name] = (contract_name, network)
+
+        if not contract_options:
+            self.warn("No contracts found for the selected environment.")
+            input("\nPress Enter to return to the main menu...")
+            return
+
+        # Let user select contract
+        selected_display = self.prompt_choice(
+            "Select contract",
+            contract_options,
+        )
+        contract_name, network = contract_map[selected_display]
+
+        # Get contract address and RPC endpoint
+        contract_address = config.get_contract_address(contract_name, network, env_key)
+        rpc_endpoint = config.get_rpc_endpoint(network, env_key)
+
+        if not contract_address or not rpc_endpoint:
+            self.warn("Contract address or RPC endpoint not found.")
+            input("\nPress Enter to return to the main menu...")
+            return
+
+        # Connect to web3
+        try:
+            # Handle WebSocket URLs
+            if rpc_endpoint.startswith("wss://"):
+                # For WebSocket, we'll need to use HTTP endpoint instead
+                # Convert wss to https for basic queries
+                http_endpoint = rpc_endpoint.replace("wss://", "https://")
+                w3 = Web3(Web3.HTTPProvider(http_endpoint))
+            else:
+                w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+
+            if not w3.is_connected():
+                raise ConnectionError("Failed to connect to RPC endpoint")
+
+            # Get contract info
+            contract_info = self._fetch_contract_info(w3, contract_address, network)
+
+            # Display contract info
+            self.print_wpac_info(
+                network,
+                environment,
+                contract_address,
+                contract_info,
+            )
+        except Exception as e:
+            self.warn(f"Failed to fetch wPAC info: {e}")
+            return
+
+        input("\nPress Enter to return to the main menu...")
+
+    def _fetch_contract_info(self, w3: "Web3", contract_address: str, network: str) -> Dict[str, Any]:
+        """Fetch contract information from the blockchain."""
+        from web3 import Web3
+
+        info = {}
+
+        # Get contract address (native token) balance
+        try:
+            balance_wei = w3.eth.get_balance(Web3.to_checksum_address(contract_address))
+            balance_eth = w3.from_wei(balance_wei, "ether")
+            info["native_balance"] = balance_eth
+        except Exception as e:
+            info["native_balance"] = None
+            info["native_balance_error"] = str(e)
+
+        # Get number of holders (for ERC-20 tokens)
+        # This is complex and requires scanning Transfer events
+        # For now, we'll try to get totalSupply if it's an ERC-20 token
+        try:
+            # Standard ERC-20 ABI for totalSupply, balanceOf, decimals
+            erc20_abi = [
+                {
+                    "constant": True,
+                    "inputs": [],
+                    "name": "totalSupply",
+                    "outputs": [{"name": "", "type": "uint256"}],
+                    "type": "function",
+                },
+                {
+                    "constant": True,
+                    "inputs": [],
+                    "name": "decimals",
+                    "outputs": [{"name": "", "type": "uint8"}],
+                    "type": "function",
+                },
+            ]
+
+            contract = w3.eth.contract(
+                address=Web3.to_checksum_address(contract_address),
+                abi=erc20_abi,
+            )
+
+            try:
+                total_supply = contract.functions.totalSupply().call()
+                decimals = contract.functions.decimals().call()
+                info["total_supply"] = total_supply / (10 ** decimals)
+                info["decimals"] = decimals
+            except Exception:
+                # Not an ERC-20 or doesn't have these functions
+                info["total_supply"] = None
+
+        except Exception as e:
+            info["total_supply"] = None
+            info["error"] = str(e)
+
+        return info
+
+    def print_wpac_info(
+        self,
+        network: str,
+        environment: str,
+        contract_address: str,
+        contract_info: Dict[str, Any],
+    ) -> None:
+        """Print wPAC (ERC-20 token) information."""
+        print()
+        print(f"[wPAC Info] {network.capitalize()} ({environment})")
+        print(f"Address: {contract_address}")
+
+        # Native balance
+        if "native_balance" in contract_info and contract_info["native_balance"] is not None:
+            print(f"Balance: {contract_info['native_balance']:.6f} ETH")
+        elif "native_balance_error" in contract_info:
+            print(f"Balance: Error - {contract_info['native_balance_error']}")
+
+        # Total supply (if ERC-20)
+        if "total_supply" in contract_info and contract_info["total_supply"] is not None:
+            decimals = contract_info.get("decimals", 18)
+            print(f"Total Supply: {contract_info['total_supply']:.{decimals}f}")
 
     def _create_and_sign_wrap_tx(
         self,
