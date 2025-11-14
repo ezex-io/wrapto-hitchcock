@@ -124,3 +124,32 @@ def list_environments() -> list[str]:
     """List all available environment types."""
     return ["testnet", "mainnet"]
 
+
+# Pactus Wrapto addresses (deposit and withdraw)
+# Deposit: locked/cold address for wrapping PAC
+# Withdraw: unlocked/warm address for unwrapping wPAC
+WRAPTO_ADDRESSES: Dict[str, Dict[str, str]] = {
+    "mainnet": {
+        "deposit": "pc1zgp0x33hehvczq6dggs04gywfqpzl9fea5039gh",
+        "withdraw": "pc1zqyxjatqfhaj3arc727alwl4sa3z8lv2m730eh2",
+    },
+    "testnet": {
+        "deposit": "tpc1rlqj68h3hm4nw9js3jpnl75kr8sfh79xkxt2lck",
+        "withdraw": "tpc1rlqj68h3hm4nw9js3jpnl75kr8sfh79xkxt2lck",
+    },
+}
+
+
+def get_wrapto_address(environment: str = "mainnet", address_type: str = "deposit") -> Optional[str]:
+    """
+    Get Wrapto address for a given environment and type.
+
+    Args:
+        environment: Environment type ("testnet" or "mainnet")
+        address_type: Type of address ("deposit" or "withdraw")
+
+    Returns:
+        Wrapto address as string, or None if not found
+    """
+    return WRAPTO_ADDRESSES.get(environment, {}).get(address_type)
+
