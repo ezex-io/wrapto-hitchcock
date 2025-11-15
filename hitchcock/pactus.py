@@ -2,13 +2,13 @@
 
 from typing import Dict, Tuple
 import grpc
-from pactus.crypto.hrp import HRP
+from pactus.crypto.crypto import CryptoConfig
 from pactus.crypto.ed25519.private_key import PrivateKey as EdPrivateKey
 from pactus.transaction.transaction import Transaction
 from pactus.amount import Amount
 from pactus.crypto.address import Address
-from pactus.rpc.blockchain_pb2_grpc import BlockchainStub
-from pactus.rpc.blockchain_pb2 import GetAccountRequest
+from pactus_grpc.blockchain_pb2_grpc import BlockchainStub
+from pactus_grpc.blockchain_pb2 import GetAccountRequest
 
 from hitchcock.models import Credentials
 
@@ -16,12 +16,12 @@ from hitchcock.models import Credentials
 def setup_hrp(is_testnet: bool) -> None:
     """Set up HRP for Pactus network using Pactus SDK."""
     if is_testnet:
-        HRP.use_testnet()
+        CryptoConfig.use_testnet()
     else:
         # Set mainnet HRP values
-        HRP.ADDRESS_HRP = "pc"
-        HRP.PUBLIC_KEY_HRP = "public"
-        HRP.PRIVATE_KEY_HRP = "secret"
+        CryptoConfig.ADDRESS_HRP = "pc"
+        CryptoConfig.PUBLIC_KEY_HRP = "public"
+        CryptoConfig.PRIVATE_KEY_HRP = "secret"
 
 
 def generate_credentials(environment: str) -> Credentials:

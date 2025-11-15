@@ -11,12 +11,12 @@ Hitchcock is an interactive toolkit that allows Wrapto engineers to test Wrapto 
 ### Install dependencies**
 
 ```bash
-pip install pactus-sdk
-pip install eth-account
+python3 -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 ### Start Hitchcock
 
-```
+```bash
 python3 hitchcock.py
 ```
 
