@@ -254,19 +254,19 @@ class HitchcockCLI:
         total_supply = 0.0
         contract_name = "wpac"
         network_supplies = {}  # Store supply for each network
-        network_decimals = {}  # Store decimals for each network
 
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             rpc_endpoint = config.get_rpc_endpoint(network, env_key)
             if address and rpc_endpoint:
                 try:
-                    contract_info = evm.get_wpac_info(address, rpc_endpoint)
-                    if contract_info.get("total_supply") is not None:
-                        supply = contract_info["total_supply"]
+                    # Use lightweight function that only fetches total supply
+                    supply = evm.get_wpac_total_supply(address, rpc_endpoint)
+                    if supply is not None:
                         total_supply += supply
                         network_supplies[network] = supply
-                        network_decimals[network] = contract_info.get("decimals", 9)
+                    else:
+                        network_supplies[network] = None  # Mark as unavailable
                 except Exception:
                     network_supplies[network] = None  # Mark as unavailable
 
@@ -286,10 +286,10 @@ class HitchcockCLI:
                 # Get supply for this network
                 supply = network_supplies.get(network)
                 if supply is not None:
-                    decimals = network_decimals.get(network, 9)  # Default to 9 if not available
-                    display_name = f"wPAC on {network.capitalize()} ({supply:.{decimals}f} wPAC)"
+                    # Use fixed decimals from config
+                    display_name = f"wPAC on {config.get_network_display_name(network)} ({supply:.{config.WPAC_DECIMALS}f} wPAC)"
                 else:
-                    display_name = f"wPAC on {network.capitalize()} (N/A)"
+                    display_name = f"wPAC on {config.get_network_display_name(network)} (N/A)"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -371,7 +371,7 @@ class HitchcockCLI:
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             if address:
-                display_name = f"wPAC on {network.capitalize()}"
+                display_name = f"wPAC on {config.get_network_display_name(network)}"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -468,7 +468,7 @@ class HitchcockCLI:
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             if address:
-                display_name = f"wPAC on {network.capitalize()}"
+                display_name = f"wPAC on {config.get_network_display_name(network)}"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -554,7 +554,7 @@ class HitchcockCLI:
     ) -> None:
         """Print signed administrator transaction details."""
         print()
-        print(utils.bold_cyan(f"[{action}] {network.capitalize()} ({environment})"))
+        print(utils.bold_cyan(f"[{action}] {config.get_network_display_name(network)} ({environment})"))
         print()
         print(f"{utils.bold('Contract:')} {signed_tx.get('contract_address', 'N/A')}")
 
@@ -655,8 +655,26 @@ class HitchcockCLI:
     ) -> None:
         """Print wPAC (ERC-20 token) information."""
         print()
-        print(f"[wPAC Info] {network.capitalize()} ({environment})")
+        print(f"[wPAC Info] {config.get_network_display_name(network)} ({environment})")
         print(f"Address: {contract_address}")
+        print()
+
+        # Display ERC-20 standard properties
+        if "name" in contract_info and contract_info["name"]:
+            print(f"Name: {contract_info['name']}")
+        else:
+            print("Name: N/A")
+
+        if "symbol" in contract_info and contract_info["symbol"]:
+            print(f"Symbol: {contract_info['symbol']}")
+        else:
+            print("Symbol: N/A")
+
+        if "decimals" in contract_info and contract_info["decimals"] is not None:
+            print(f"Decimals: {contract_info['decimals']}")
+        else:
+            print("Decimals: N/A")
+
         print()
 
         # Display admin addresses
@@ -678,8 +696,14 @@ class HitchcockCLI:
         print()
 
         if "total_supply" in contract_info and contract_info["total_supply"] is not None:
-            decimals = contract_info.get("decimals", 18)
-            print(f"Total Supply: {contract_info['total_supply']:.{decimals}f} wPAC")
+            # Use fixed decimals from config
+            print(f"Total Supply: {contract_info['total_supply']:.{config.WPAC_DECIMALS}f} wPAC")
+
+        if "collected_fee" in contract_info and contract_info["collected_fee"] is not None:
+            # Use fixed decimals from config
+            print(f"Collected Fee: {contract_info['collected_fee']:.{config.WPAC_DECIMALS}f} wPAC")
+        else:
+            print("Collected Fee: N/A")
 
     def exit_program(self) -> None:
         """Exit the program."""

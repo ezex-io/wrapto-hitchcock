@@ -125,6 +125,25 @@ def list_environments() -> list[str]:
     return ["testnet", "mainnet"]
 
 
+def get_network_display_name(network: str) -> str:
+    """
+    Get the proper display name for a network.
+
+    Args:
+        network: Network key (e.g., "bsc", "polygon", "base")
+
+    Returns:
+        Properly formatted display name (e.g., "BSC", "Polygon", "Base")
+    """
+    network_display_map = {
+        "bsc": "BSC",
+        "polygon": "Polygon",
+        "base": "Base",
+        "ethereum": "Ethereum",
+    }
+    return network_display_map.get(network.lower(), network.capitalize())
+
+
 # Pactus Wrapto addresses (deposit and withdraw)
 # Deposit: locked/cold address for wrapping PAC
 # Withdraw: unlocked/warm address for unwrapping wPAC
@@ -152,4 +171,8 @@ def get_wrapto_address(environment: str = "mainnet", address_type: str = "deposi
         Wrapto address as string, or None if not found
     """
     return WRAPTO_ADDRESSES.get(environment, {}).get(address_type)
+
+
+# wPAC token configuration
+WPAC_DECIMALS = 9  # Fixed decimal places for wPAC token
 

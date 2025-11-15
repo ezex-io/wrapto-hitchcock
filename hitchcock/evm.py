@@ -49,6 +49,46 @@ def derive_address_from_private_key(privkey_str: str) -> Dict[str, str]:
     }
 
 
+def get_wpac_total_supply(contract_address: str, rpc_endpoint: str) -> float | None:
+    """
+    Get only the total supply of wPAC contract (lightweight function for faster queries).
+
+    Args:
+        contract_address: Address of the wPAC contract
+        rpc_endpoint: RPC endpoint URL
+
+    Returns:
+        Total supply as float (already divided by decimals), or None if failed
+    """
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+
+    if not w3.is_connected():
+        raise ConnectionError("Failed to connect to RPC endpoint")
+
+    try:
+        # Minimal ABI - only totalSupply function
+        wpac_abi = [
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "totalSupply",
+                "outputs": [{"name": "", "type": "uint256"}],
+                "type": "function",
+            },
+        ]
+
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=wpac_abi,
+        )
+
+        total_supply = contract.functions.totalSupply().call()
+        # Use fixed decimals from config
+        return total_supply / (10 ** config.WPAC_DECIMALS)
+    except Exception:
+        return None
+
+
 def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
     """Get wPAC contract information."""
     w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
@@ -64,15 +104,29 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
             {
                 "constant": True,
                 "inputs": [],
+                "name": "name",
+                "outputs": [{"name": "", "type": "string"}],
+                "type": "function",
+            },
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "symbol",
+                "outputs": [{"name": "", "type": "string"}],
+                "type": "function",
+            },
+            {
+                "constant": True,
+                "inputs": [],
                 "name": "totalSupply",
                 "outputs": [{"name": "", "type": "uint256"}],
                 "type": "function",
             },
             {
                 "constant": True,
-                "inputs": [],
-                "name": "decimals",
-                "outputs": [{"name": "", "type": "uint8"}],
+                "inputs": [{"name": "_owner", "type": "address"}],
+                "name": "balanceOf",
+                "outputs": [{"name": "balance", "type": "uint256"}],
                 "type": "function",
             },
             {
@@ -103,11 +157,26 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
             abi=wpac_abi,
         )
 
+        # Get ERC-20 standard properties
+        try:
+            name = contract.functions.name().call()
+            info["name"] = name
+        except Exception:
+            info["name"] = None
+
+        try:
+            symbol = contract.functions.symbol().call()
+            info["symbol"] = symbol
+        except Exception:
+            info["symbol"] = None
+
+        # Decimals is fixed, use config value
+        info["decimals"] = config.WPAC_DECIMALS
+
         try:
             total_supply = contract.functions.totalSupply().call()
-            decimals = contract.functions.decimals().call()
-            info["total_supply"] = total_supply / (10 ** decimals)
-            info["decimals"] = decimals
+            # Use fixed decimals from config instead of fetching from contract
+            info["total_supply"] = total_supply / (10 ** config.WPAC_DECIMALS)
         except Exception:
             info["total_supply"] = None
 
@@ -129,6 +198,18 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
             info["fee_collector"] = fee_collector
         except Exception:
             info["fee_collector"] = None
+
+        # Get collected fees (contract's own balance)
+        # According to the contract, fees are accumulated in the contract balance
+        # and can be withdrawn via withdrawFee() which transfers balanceOf(address(this))
+        try:
+            contract_balance = contract.functions.balanceOf(
+                Web3.to_checksum_address(contract_address)
+            ).call()
+            # Convert to human-readable format using fixed decimals
+            info["collected_fee"] = contract_balance / (10 ** config.WPAC_DECIMALS)
+        except Exception:
+            info["collected_fee"] = None
 
     except Exception as e:
         info["total_supply"] = None
