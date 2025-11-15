@@ -17,9 +17,9 @@ class HitchcockCLI:
         self.actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Generate private key", self.generate_private_key),
             "2": ("Get Address from Private key", self.get_address_from_private_key),
-            "3": ("Create and Sign Wrap Transaction (PAC->wPAC)", self.create_wrap_transaction),
-            "4": ("Show PAC Info", self.show_pac_info),
-            "5": ("Show wPAC Info", self.show_wpac_info),
+            "3": ("Show PAC Info", self.show_pac_info),
+            "4": ("Show wPAC Info", self.show_wpac_info),
+            "5": ("Create and Sign Wrap Transaction (PAC->wPAC)", self.create_wrap_transaction),
             "6": ("Create and Sign Unwrap Transaction (wPAC->PAC)", self.create_unwrap_transaction),
             "7": ("Administrator Menu", self.administrator_menu),
             "0": ("Exit", self.exit_program),
@@ -28,7 +28,7 @@ class HitchcockCLI:
 
     def run(self) -> None:
         """Run the CLI main loop."""
-        utils.clear_screen()
+        # utils.clear_screen()
         utils.print_banner()
 
         while not self.should_exit:
@@ -58,7 +58,7 @@ class HitchcockCLI:
         print()
         print("=== Hitchcock Main Menu ===")
         for key, (label, _) in self.actions.items():
-            print(f"{key}. {label}")
+            print(f"{key}. {utils.bold(label)}")
         print()
         return input("Choose an option: ").strip()
 
@@ -257,9 +257,12 @@ class HitchcockCLI:
         )
         env_key = "mainnet" if environment.lower().startswith("main") else "testnet"
 
-        # Calculate total wPAC supply across all networks
+        # Calculate total wPAC supply across all networks and fetch individual supplies
         total_supply = 0.0
         contract_name = "wpac"
+        network_supplies = {}  # Store supply for each network
+        network_decimals = {}  # Store decimals for each network
+
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             rpc_endpoint = config.get_rpc_endpoint(network, env_key)
@@ -267,9 +270,12 @@ class HitchcockCLI:
                 try:
                     contract_info = evm.get_wpac_info(address, rpc_endpoint)
                     if contract_info.get("total_supply") is not None:
-                        total_supply += contract_info["total_supply"]
+                        supply = contract_info["total_supply"]
+                        total_supply += supply
+                        network_supplies[network] = supply
+                        network_decimals[network] = contract_info.get("decimals", 9)
                 except Exception:
-                    pass  # Skip if can't fetch this network
+                    network_supplies[network] = None  # Mark as unavailable
 
         # Display total wPAC supply in bold and yellow
         if total_supply > 0:
@@ -277,14 +283,20 @@ class HitchcockCLI:
             print(utils.bold_yellow(f"Total Supply: {total_supply:.9f} wPAC"))
             print()
 
-        # Get available wPAC contracts
+        # Get available wPAC contracts with supply information
         contract_options = []
         contract_map = {}
 
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             if address:
-                display_name = f"wPAC on {network.capitalize()}"
+                # Get supply for this network
+                supply = network_supplies.get(network)
+                if supply is not None:
+                    decimals = network_decimals.get(network, 9)  # Default to 9 if not available
+                    display_name = f"wPAC on {network.capitalize()} ({supply:.{decimals}f} wPAC)"
+                else:
+                    display_name = f"wPAC on {network.capitalize()} (N/A)"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
