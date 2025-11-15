@@ -135,7 +135,7 @@ WRAPTO_ADDRESSES: Dict[str, Dict[str, str]] = {
     },
     "testnet": {
         "deposit": "tpc1rlqj68h3hm4nw9js3jpnl75kr8sfh79xkxt2lck",
-        "withdraw": "tpc1rlqj68h3hm4nw9js3jpnl75kr8sfh79xkxt2lck",
+        "withdraw": "tpc1r2kxwz8w23pcnv7vpnt5s352dtu80rp2h5g6dwn",
     },
 }
 
