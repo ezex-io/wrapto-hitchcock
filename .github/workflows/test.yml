@@ -1,23 +1,24 @@
-name: Test Hitchcock
+name: Lint and Format Check
+permissions:
+  contents: read
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: ["main"]
   pull_request:
-    branches: [ main, master, develop ]
-  workflow_dispatch:
+    branches: ["main"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Set up Python (latest)
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
-        python-version: "latest"
+        python-version: "3.12"
 
     - name: Install dependencies
       run: |
