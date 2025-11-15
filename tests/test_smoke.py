@@ -11,8 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def test_imports():
     """Test that all modules can be imported."""
     try:
-        import config
-        from hitchcock import cli, evm, models, pactus, utils
+        from hitchcock import config, cli, evm, models, pactus, utils
         print("✓ All modules imported successfully")
         return True
     except ImportError as e:
@@ -89,7 +88,7 @@ def test_utils_functions():
 def test_config():
     """Test that config module is accessible."""
     try:
-        import config
+        from hitchcock import config
         assert hasattr(config, 'CONTRACTS')
         assert hasattr(config, 'WRAPTO_ADDRESSES')
         assert callable(config.get_contract_address)

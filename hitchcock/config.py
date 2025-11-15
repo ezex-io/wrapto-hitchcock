@@ -54,7 +54,7 @@ RPC_ENDPOINTS: Dict[str, Dict[str, str]] = {
     "bsc": {
         "testnet": get_env(
             "BSC_TESTNET_RPC",
-            "wss://bsc-testnet.drpc.org"
+            "https://bsc-testnet.drpc.org"
         ),
         "mainnet": get_env(
             "BSC_MAINNET_RPC",

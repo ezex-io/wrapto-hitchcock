@@ -6,8 +6,7 @@ import base64
 import sys
 from typing import Any, Callable, Dict, List, Tuple
 
-import config
-from hitchcock import evm, models, pactus, utils
+from hitchcock import config, evm, models, pactus, utils
 
 
 class HitchcockCLI:

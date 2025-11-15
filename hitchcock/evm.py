@@ -5,6 +5,7 @@ from eth_account import Account
 from eth_keys import keys
 from web3 import Web3
 
+from hitchcock import config
 from hitchcock.models import Credentials
 
 
@@ -50,26 +51,12 @@ def derive_address_from_private_key(privkey_str: str) -> Dict[str, str]:
 
 def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
     """Get wPAC contract information."""
-    # Handle WebSocket URLs
-    if rpc_endpoint.startswith("wss://"):
-        http_endpoint = rpc_endpoint.replace("wss://", "https://")
-        w3 = Web3(Web3.HTTPProvider(http_endpoint))
-    else:
-        w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
 
     if not w3.is_connected():
         raise ConnectionError("Failed to connect to RPC endpoint")
 
     info = {}
-
-    # Get contract native balance
-    try:
-        balance_wei = w3.eth.get_balance(Web3.to_checksum_address(contract_address))
-        balance_eth = w3.from_wei(balance_wei, "ether")
-        info["native_balance"] = balance_eth
-    except Exception as e:
-        info["native_balance"] = None
-        info["native_balance_error"] = str(e)
 
     # Get ERC-20 total supply and admin addresses
     try:
@@ -157,12 +144,7 @@ def create_set_minter_transaction(
     rpc_endpoint: str,
 ) -> Dict[str, Any]:
     """Create and sign a transaction to set the minter address."""
-    # Handle WebSocket URLs
-    if rpc_endpoint.startswith("wss://"):
-        http_endpoint = rpc_endpoint.replace("wss://", "https://")
-        w3 = Web3(Web3.HTTPProvider(http_endpoint))
-    else:
-        w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
 
     if not w3.is_connected():
         raise ConnectionError("Failed to connect to RPC endpoint")
@@ -204,14 +186,42 @@ def create_set_minter_transaction(
         gas_estimate = contract.functions.setMinter(Web3.to_checksum_address(new_minter)).estimate_gas(
             {"from": owner_address}
         )
-        transaction = contract.functions.setMinter(Web3.to_checksum_address(new_minter)).build_transaction(
-            {
-                "from": owner_address,
-                "nonce": w3.eth.get_transaction_count(owner_address),
-                "gas": int(gas_estimate * 1.2),  # Add 20% buffer
-                "gasPrice": w3.eth.gas_price,
-            }
-        )
+
+        # Get chain ID from RPC (always fetch from the connected node)
+        chain_id = w3.eth.chain_id
+
+        # Debug information for developers
+        from hitchcock import utils
+        utils.info(f"Chain ID: {chain_id}")
+
+        # Build transaction parameters - use EIP-1559 for modern chains
+        tx_params = {
+            "from": owner_address,
+            "nonce": w3.eth.get_transaction_count(owner_address),
+            "gas": int(gas_estimate * 1.2),  # Add 20% buffer
+            "chainId": chain_id,
+        }
+
+        # Try to use EIP-1559 (type 2) for modern chains
+        # Most modern chains support EIP-1559, so we'll try it and fallback to legacy if needed
+        try:
+            max_priority_fee = w3.eth.max_priority_fee
+            # Estimate max fee as 2x current gas price (safe fallback)
+            current_gas_price = w3.eth.gas_price
+            max_fee_per_gas = current_gas_price * 2
+            tx_params["maxFeePerGas"] = max_fee_per_gas
+            tx_params["maxPriorityFeePerGas"] = max_priority_fee
+            tx_params["type"] = 2  # EIP-1559
+            utils.info(f"Using EIP-1559 transaction (Type 2)")
+            utils.info(f"  Max Fee Per Gas: {max_fee_per_gas}")
+            utils.info(f"  Max Priority Fee Per Gas: {max_priority_fee}")
+        except Exception as e:
+            # Fallback to legacy transaction if EIP-1559 fee estimation fails
+            utils.warn(f"EIP-1559 not available, using legacy transaction: {e}")
+            tx_params["gasPrice"] = w3.eth.gas_price
+            utils.info(f"  Gas Price: {tx_params['gasPrice']}")
+
+        transaction = contract.functions.setMinter(Web3.to_checksum_address(new_minter)).build_transaction(tx_params)
     except Exception as e:
         raise ValueError(f"Failed to build transaction: {e}")
 
@@ -230,12 +240,7 @@ def create_set_minter_transaction(
 
 def send_transaction(raw_transaction_hex: str, rpc_endpoint: str) -> Dict[str, Any]:
     """Send a signed transaction to the blockchain."""
-    # Handle WebSocket URLs
-    if rpc_endpoint.startswith("wss://"):
-        http_endpoint = rpc_endpoint.replace("wss://", "https://")
-        w3 = Web3(Web3.HTTPProvider(http_endpoint))
-    else:
-        w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
 
     if not w3.is_connected():
         raise ConnectionError("Failed to connect to RPC endpoint")
@@ -274,12 +279,7 @@ def create_set_fee_collector_transaction(
     rpc_endpoint: str,
 ) -> Dict[str, Any]:
     """Create and sign a transaction to set the fee collector address."""
-    # Handle WebSocket URLs
-    if rpc_endpoint.startswith("wss://"):
-        http_endpoint = rpc_endpoint.replace("wss://", "https://")
-        w3 = Web3(Web3.HTTPProvider(http_endpoint))
-    else:
-        w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
 
     if not w3.is_connected():
         raise ConnectionError("Failed to connect to RPC endpoint")
@@ -321,14 +321,42 @@ def create_set_fee_collector_transaction(
         gas_estimate = contract.functions.setFeeCollector(Web3.to_checksum_address(new_fee_collector)).estimate_gas(
             {"from": owner_address}
         )
-        transaction = contract.functions.setFeeCollector(Web3.to_checksum_address(new_fee_collector)).build_transaction(
-            {
-                "from": owner_address,
-                "nonce": w3.eth.get_transaction_count(owner_address),
-                "gas": int(gas_estimate * 1.2),  # Add 20% buffer
-                "gasPrice": w3.eth.gas_price,
-            }
-        )
+
+        # Get chain ID from RPC (always fetch from the connected node)
+        chain_id = w3.eth.chain_id
+
+        # Debug information for developers
+        from hitchcock import utils
+        utils.info(f"Chain ID: {chain_id}")
+
+        # Build transaction parameters - use EIP-1559 for modern chains
+        tx_params = {
+            "from": owner_address,
+            "nonce": w3.eth.get_transaction_count(owner_address),
+            "gas": int(gas_estimate * 1.2),  # Add 20% buffer
+            "chainId": chain_id,
+        }
+
+        # Try to use EIP-1559 (type 2) for modern chains
+        # Most modern chains support EIP-1559, so we'll try it and fallback to legacy if needed
+        try:
+            max_priority_fee = w3.eth.max_priority_fee
+            # Estimate max fee as 2x current gas price (safe fallback)
+            current_gas_price = w3.eth.gas_price
+            max_fee_per_gas = current_gas_price * 2
+            tx_params["maxFeePerGas"] = max_fee_per_gas
+            tx_params["maxPriorityFeePerGas"] = max_priority_fee
+            tx_params["type"] = 2  # EIP-1559
+            utils.info(f"Using EIP-1559 transaction (Type 2)")
+            utils.info(f"  Max Fee Per Gas: {max_fee_per_gas}")
+            utils.info(f"  Max Priority Fee Per Gas: {max_priority_fee}")
+        except Exception as e:
+            # Fallback to legacy transaction if EIP-1559 fee estimation fails
+            utils.warn(f"EIP-1559 not available, using legacy transaction: {e}")
+            tx_params["gasPrice"] = w3.eth.gas_price
+            utils.info(f"  Gas Price: {tx_params['gasPrice']}")
+
+        transaction = contract.functions.setFeeCollector(Web3.to_checksum_address(new_fee_collector)).build_transaction(tx_params)
     except Exception as e:
         raise ValueError(f"Failed to build transaction: {e}")
 
