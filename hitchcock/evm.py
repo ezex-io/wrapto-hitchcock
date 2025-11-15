@@ -223,9 +223,48 @@ def create_set_minter_transaction(
 
     return {
         "contract_address": contract_address,
-        "raw_transaction": signed_txn.rawTransaction.hex(),
+        "raw_transaction": signed_txn.raw_transaction.hex(),
         "transaction_hash": signed_txn.hash.hex(),
     }
+
+
+def send_transaction(raw_transaction_hex: str, rpc_endpoint: str) -> Dict[str, Any]:
+    """Send a signed transaction to the blockchain."""
+    # Handle WebSocket URLs
+    if rpc_endpoint.startswith("wss://"):
+        http_endpoint = rpc_endpoint.replace("wss://", "https://")
+        w3 = Web3(Web3.HTTPProvider(http_endpoint))
+    else:
+        w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+
+    if not w3.is_connected():
+        raise ConnectionError("Failed to connect to RPC endpoint")
+
+    try:
+        # Remove 0x prefix if present
+        if raw_transaction_hex.startswith("0x"):
+            raw_transaction_hex = raw_transaction_hex[2:]
+
+        # Send the transaction
+        tx_hash = w3.eth.send_raw_transaction(bytes.fromhex(raw_transaction_hex))
+
+        # Wait for transaction receipt (optional, can be removed if not needed)
+        try:
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            return {
+                "transaction_hash": tx_hash.hex(),
+                "status": receipt.status,
+                "block_number": receipt.blockNumber,
+                "gas_used": receipt.gasUsed,
+            }
+        except Exception:
+            # If we can't wait for receipt, just return the hash
+            return {
+                "transaction_hash": tx_hash.hex(),
+                "status": "pending",
+            }
+    except Exception as e:
+        raise ValueError(f"Failed to send transaction: {e}")
 
 
 def create_set_fee_collector_transaction(
@@ -301,7 +340,7 @@ def create_set_fee_collector_transaction(
 
     return {
         "contract_address": contract_address,
-        "raw_transaction": signed_txn.rawTransaction.hex(),
+        "raw_transaction": signed_txn.raw_transaction.hex(),
         "transaction_hash": signed_txn.hash.hex(),
     }
 

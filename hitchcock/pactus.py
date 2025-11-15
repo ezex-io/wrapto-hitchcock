@@ -2,7 +2,7 @@
 
 from typing import Dict, Tuple
 import grpc
-from pactus.crypto import hrp as pactus_hrp
+from pactus.crypto.hrp import HRP
 from pactus.crypto.ed25519.private_key import PrivateKey as EdPrivateKey
 from pactus.transaction.transaction import Transaction
 from pactus.amount import Amount
@@ -16,12 +16,12 @@ from hitchcock.models import Credentials
 def setup_hrp(is_testnet: bool) -> None:
     """Set up HRP for Pactus network using Pactus SDK."""
     if is_testnet:
-        pactus_hrp.HRP.use_testnet()
+        HRP.use_testnet()
     else:
         # Set mainnet HRP values
-        pactus_hrp.HRP.ADDRESS_HRP = "pc"
-        pactus_hrp.HRP.PUBLIC_KEY_HRP = "public"
-        pactus_hrp.HRP.PRIVATE_KEY_HRP = "secret"
+        HRP.ADDRESS_HRP = "pc"
+        HRP.PUBLIC_KEY_HRP = "public"
+        HRP.PRIVATE_KEY_HRP = "secret"
 
 
 def generate_credentials(environment: str) -> Credentials:

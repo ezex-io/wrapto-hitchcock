@@ -1,5 +1,7 @@
 """Utility functions for Hitchcock."""
 
+from typing import Callable, Dict, List, Tuple, Union
+
 # ANSI color codes
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -84,4 +86,50 @@ def bold_red(message: str) -> str:
 def bold_green(message: str) -> str:
     """Return a bold green formatted message."""
     return f"{BOLD}{GREEN}{message}{RESET}"
+
+
+def bold_cyan(message: str) -> str:
+    """Return a bold cyan formatted message."""
+    return f"{BOLD}{CYAN}{message}{RESET}"
+
+
+def bold_blue(message: str) -> str:
+    """Return a bold blue formatted message."""
+    return f"{BOLD}{BLUE}{message}{RESET}"
+
+
+def print_menu(
+    title: str,
+    items: Union[Dict[str, str], List[Tuple[str, str]]],
+    item_formatter: Callable[[str], str] | None = None,
+    title_formatter: Callable[[str], str] | None = None,
+) -> None:
+    """Print a formatted menu.
+
+    Args:
+        title: Menu title
+        items: Dictionary mapping keys to labels, or list of (key, label) tuples
+        item_formatter: Optional function to format menu items (default: bold)
+        title_formatter: Optional function to format title (default: no formatting)
+    """
+    print()
+    if title_formatter:
+        print(title_formatter(f"=== {title} ==="))
+    else:
+        print(f"=== {title} ===")
+
+    # Default formatter makes items bold
+    if item_formatter is None:
+        item_formatter = bold
+
+    # Handle both dict and list inputs
+    if isinstance(items, dict):
+        items_list = items.items()
+    else:
+        items_list = items
+
+    for key, label in items_list:
+        print(f"{key}. {item_formatter(label)}")
+
+    print()
 

@@ -55,11 +55,9 @@ class HitchcockCLI:
 
     def prompt_main_menu(self) -> str:
         """Prompt for main menu choice."""
-        print()
-        print("=== Hitchcock Main Menu ===")
-        for key, (label, _) in self.actions.items():
-            print(f"{key}. {utils.bold(label)}")
-        print()
+        # Convert actions to simple dict for menu display
+        menu_items = {key: label for key, (label, _) in self.actions.items()}
+        utils.print_menu("Hitchcock Main Menu", menu_items)
         return input("Choose an option: ").strip()
 
     def prompt_choice(self, title: str, options: List[str]) -> str:
@@ -68,11 +66,7 @@ class HitchcockCLI:
         reverse_map = {option.lower(): option for option in options}
 
         while True:
-            print()
-            print(title)
-            for idx, option in options_map.items():
-                print(f"{idx}. {option}")
-            print()
+            utils.print_menu(title, list(options_map.items()))
             choice = input("Choose an option: ").strip()
             if not choice:
                 continue
@@ -340,11 +334,9 @@ class HitchcockCLI:
         }
 
         while True:
-            print()
-            print("=== Administrator Menu ===")
-            for key, (label, _) in admin_actions.items():
-                print(f"{key}. {label}")
-            print()
+            # Convert admin_actions to simple dict for menu display
+            menu_items = {key: label for key, (label, _) in admin_actions.items()}
+            utils.print_menu("Administrator Menu", menu_items)
 
             choice = input("Choose an option: ").strip()
             if choice == "0":
@@ -400,6 +392,18 @@ class HitchcockCLI:
             input("\nPress Enter to return to the administrator menu...")
             return
 
+        # Fetch current minter address
+        try:
+            contract_info = evm.get_wpac_info(contract_address, rpc_endpoint)
+            current_minter = contract_info.get("minter")
+            print()
+            if current_minter:
+                print(utils.bold_yellow(f"Current Minter Address: {current_minter}"))
+            else:
+                utils.warn("Could not fetch current minter address.")
+        except Exception as e:
+            utils.warn(f"Could not fetch current minter address: {e}")
+
         print()
         new_minter = input("Enter new minter address: ").strip()
         if not new_minter:
@@ -422,6 +426,27 @@ class HitchcockCLI:
                 rpc_endpoint,
             )
             self.print_signed_admin_transaction(signed_tx, network, environment, "Set Minter", new_minter)
+
+            # Ask if user wants to send the transaction
+            print()
+            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
+            if send_choice in ["y", "yes"]:
+                try:
+                    result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
+                    print()
+                    utils.success("Transaction sent successfully!")
+                    print()
+                    print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(result['transaction_hash'])}")
+                    if "block_number" in result:
+                        print(f"{utils.bold('Block Number:')} {result['block_number']}")
+                        status_text = "Success" if result['status'] == 1 else "Failed"
+                        status_color = utils.bold_green if result['status'] == 1 else utils.bold_red
+                        print(f"{utils.bold('Status:')} {status_color(status_text)}")
+                        print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
+                except Exception as e:
+                    utils.error(f"Failed to send transaction: {e}")
+            else:
+                utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
         except Exception as e:
             utils.error(f"Failed to create transaction: {e}")
             return
@@ -464,6 +489,18 @@ class HitchcockCLI:
             input("\nPress Enter to return to the administrator menu...")
             return
 
+        # Fetch current fee collector address
+        try:
+            contract_info = evm.get_wpac_info(contract_address, rpc_endpoint)
+            current_fee_collector = contract_info.get("fee_collector")
+            print()
+            if current_fee_collector:
+                print(utils.bold_yellow(f"Current Fee Collector Address: {current_fee_collector}"))
+            else:
+                utils.warn("Could not fetch current fee collector address.")
+        except Exception as e:
+            utils.warn(f"Could not fetch current fee collector address: {e}")
+
         print()
         new_fee_collector = input("Enter new fee collector address: ").strip()
         if not new_fee_collector:
@@ -486,6 +523,27 @@ class HitchcockCLI:
                 rpc_endpoint,
             )
             self.print_signed_admin_transaction(signed_tx, network, environment, "Set Fee Collector", new_fee_collector)
+
+            # Ask if user wants to send the transaction
+            print()
+            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
+            if send_choice in ["y", "yes"]:
+                try:
+                    result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
+                    print()
+                    utils.success("Transaction sent successfully!")
+                    print()
+                    print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(result['transaction_hash'])}")
+                    if "block_number" in result:
+                        print(f"{utils.bold('Block Number:')} {result['block_number']}")
+                        status_text = "Success" if result['status'] == 1 else "Failed"
+                        status_color = utils.bold_green if result['status'] == 1 else utils.bold_red
+                        print(f"{utils.bold('Status:')} {status_color(status_text)}")
+                        print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
+                except Exception as e:
+                    utils.error(f"Failed to send transaction: {e}")
+            else:
+                utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
         except Exception as e:
             utils.error(f"Failed to create transaction: {e}")
             return
@@ -497,12 +555,23 @@ class HitchcockCLI:
     ) -> None:
         """Print signed administrator transaction details."""
         print()
-        print(f"[{action}] {network.capitalize()} ({environment})")
-        print(f"Contract: {signed_tx.get('contract_address', 'N/A')}")
-        print(f"New Address: {new_address}")
-        print(f"Signed transaction (hex): {signed_tx.get('raw_transaction', 'N/A')}")
+        print(utils.bold_cyan(f"[{action}] {network.capitalize()} ({environment})"))
+        print()
+        print(f"{utils.bold('Contract:')} {signed_tx.get('contract_address', 'N/A')}")
+
+        # Determine label based on action
+        if "Minter" in action:
+            label = "New Minter Address:"
+        elif "Fee Collector" in action:
+            label = "New Fee Collector Address:"
+        else:
+            label = "New Address:"
+
+        print(f"{utils.bold(label)} {utils.bold_yellow(new_address)}")
+        print()
+        print(f"{utils.bold('Signed Transaction (hex):')} {signed_tx.get('raw_transaction', 'N/A')}")
         if 'transaction_hash' in signed_tx:
-            print(f"Transaction hash: {signed_tx['transaction_hash']}")
+            print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(signed_tx['transaction_hash'])}")
 
     def print_credentials(self, credentials: models.Credentials) -> None:
         """Print credentials information."""
