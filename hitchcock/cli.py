@@ -12,7 +12,8 @@ from hitchcock import config, evm, models, pactus, utils
 class HitchcockCLI:
     """Main CLI class for Hitchcock."""
 
-    def __init__(self) -> None:
+    def __init__(self, environment: str = "mainnet") -> None:
+        self.environment = environment
         self.actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Generate private key", self.generate_private_key),
             "2": ("Get Address from Private key", self.get_address_from_private_key),
@@ -84,10 +85,7 @@ class HitchcockCLI:
         )
 
         if network == "Pactus":
-            environment = self.prompt_choice(
-                "Select network environment",
-                ["Mainnet", "Testnet"],
-            )
+            environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
             credentials = pactus.generate_credentials(environment)
         else:
             credentials = evm.generate_credentials(network)
@@ -103,11 +101,8 @@ class HitchcockCLI:
         )
 
         if network == "Pactus":
-            environment = self.prompt_choice(
-                "Select network environment",
-                ["Mainnet", "Testnet"],
-            )
-            is_testnet = environment.lower().startswith("test")
+            environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+            is_testnet = self.environment == "testnet"
         else:
             environment = None
             is_testnet = False
@@ -138,11 +133,8 @@ class HitchcockCLI:
 
     def create_wrap_transaction(self) -> None:
         """Create and sign a wrap transaction (PAC->wPAC)."""
-        environment = self.prompt_choice(
-            "Select network environment",
-            ["Mainnet", "Testnet"],
-        )
-        env_key = "testnet" if environment.lower().startswith("test") else "mainnet"
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
         is_testnet = env_key == "testnet"
         # Use deposit address for wrapping (locking PAC)
         wrapto_address = config.get_wrapto_address(env_key, "deposit")
@@ -209,11 +201,8 @@ class HitchcockCLI:
 
     def show_pac_info(self) -> None:
         """Show PAC balance in Wrapto deposit and withdraw addresses."""
-        environment = self.prompt_choice(
-            "Select network environment",
-            ["Mainnet", "Testnet"],
-        )
-        env_key = "testnet" if environment.lower().startswith("test") else "mainnet"
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
         is_testnet = env_key == "testnet"
 
         try:
@@ -244,11 +233,8 @@ class HitchcockCLI:
 
     def show_wpac_info(self) -> None:
         """Show wPAC (ERC-20 token) information."""
-        environment = self.prompt_choice(
-            "Select network environment",
-            ["Mainnet", "Testnet"],
-        )
-        env_key = "mainnet" if environment.lower().startswith("main") else "testnet"
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
 
         # Calculate total wPAC supply across all networks and fetch individual supplies
         total_supply = 0.0
@@ -329,15 +315,19 @@ class HitchcockCLI:
         admin_actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Set Minter Address", self.set_minter_address),
             "2": ("Set Fee Collector Address", self.set_fee_collector_address),
-            "0": ("Back to Main Menu", lambda: None),
+            "3": ("Transfer Ownership", self.transfer_ownership),
         }
 
-        while True:
-            # Convert admin_actions to simple dict for menu display
-            menu_items = {key: label for key, (label, _) in admin_actions.items()}
-            utils.print_menu("Administrator Menu", menu_items)
+        # Convert admin_actions to simple dict for menu display
+        menu_items = {key: label for key, (label, _) in admin_actions.items()}
+        # Add "0" option for going back to main menu
+        menu_items["0"] = "Back to Main Menu"
 
+        choice = ""
+        while choice != "0":
+            utils.print_menu("Administrator Menu", menu_items)
             choice = input("Choose an option: ").strip()
+
             if choice == "0":
                 break
 
@@ -345,23 +335,14 @@ class HitchcockCLI:
             if action:
                 label, callback = action
                 utils.section_header(label)
-                try:
-                    callback()
-                except KeyboardInterrupt:
-                    utils.section_footer("Cancelled. Returning to administrator menu.")
-                except EOFError:
-                    utils.section_footer("Received EOF. Returning to administrator menu.")
-                    break
+                callback()
             else:
                 utils.warn(f"Unknown choice: {choice!r}")
 
     def set_minter_address(self) -> None:
         """Set the minter address for a wPAC contract."""
-        environment = self.prompt_choice(
-            "Select network environment",
-            ["Mainnet", "Testnet"],
-        )
-        env_key = "mainnet" if environment.lower().startswith("main") else "testnet"
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
 
         # Get available wPAC contracts
         contract_options = []
@@ -410,12 +391,31 @@ class HitchcockCLI:
             input("\nPress Enter to return to the administrator menu...")
             return
 
+        # Offer Trezor signing option for both Mainnet and Testnet
+        use_trezor = False
+        owner_privkey = None
+        trezor_path = "m/44'/60'/0'/0/5"
+
         print()
-        owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
-        if not owner_privkey:
-            utils.warn("Owner private key is required.")
-            input("\nPress Enter to return to the administrator menu...")
-            return
+        sign_method = self.prompt_choice(
+            "Select signing method",
+            ["Trezor Hardware Wallet", "Private Key"],
+        )
+        if sign_method == "Trezor Hardware Wallet":
+            use_trezor = True
+            print()
+            trezor_path_input = input(f"Enter Trezor derivation path (default: {trezor_path}): ").strip()
+            if trezor_path_input:
+                trezor_path = trezor_path_input
+            print()
+            utils.info("Please connect and unlock your Trezor device...")
+        else:
+            print()
+            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            if not owner_privkey:
+                utils.warn("Owner private key is required.")
+                input("\nPress Enter to return to the administrator menu...")
+                return
 
         try:
             signed_tx = evm.create_set_minter_transaction(
@@ -423,6 +423,8 @@ class HitchcockCLI:
                 new_minter,
                 owner_privkey,
                 rpc_endpoint,
+                use_trezor=use_trezor,
+                trezor_path=trezor_path,
             )
             self.print_signed_admin_transaction(signed_tx, network, environment, "Set Minter", new_minter)
 
@@ -454,11 +456,8 @@ class HitchcockCLI:
 
     def set_fee_collector_address(self) -> None:
         """Set the fee collector address for a wPAC contract."""
-        environment = self.prompt_choice(
-            "Select network environment",
-            ["Mainnet", "Testnet"],
-        )
-        env_key = "mainnet" if environment.lower().startswith("main") else "testnet"
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
 
         # Get available wPAC contracts
         contract_options = []
@@ -507,12 +506,31 @@ class HitchcockCLI:
             input("\nPress Enter to return to the administrator menu...")
             return
 
+        # Offer Trezor signing option for both Mainnet and Testnet
+        use_trezor = False
+        owner_privkey = None
+        trezor_path = "m/44'/60'/0'/0/5"
+
         print()
-        owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
-        if not owner_privkey:
-            utils.warn("Owner private key is required.")
-            input("\nPress Enter to return to the administrator menu...")
-            return
+        sign_method = self.prompt_choice(
+            "Select signing method",
+            ["Trezor Hardware Wallet", "Private Key"],
+        )
+        if sign_method == "Trezor Hardware Wallet":
+            use_trezor = True
+            print()
+            trezor_path_input = input(f"Enter Trezor derivation path (default: {trezor_path}): ").strip()
+            if trezor_path_input:
+                trezor_path = trezor_path_input
+            print()
+            utils.info("Please connect and unlock your Trezor device...")
+        else:
+            print()
+            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            if not owner_privkey:
+                utils.warn("Owner private key is required.")
+                input("\nPress Enter to return to the administrator menu...")
+                return
 
         try:
             signed_tx = evm.create_set_fee_collector_transaction(
@@ -520,8 +538,125 @@ class HitchcockCLI:
                 new_fee_collector,
                 owner_privkey,
                 rpc_endpoint,
+                use_trezor=use_trezor,
+                trezor_path=trezor_path,
             )
             self.print_signed_admin_transaction(signed_tx, network, environment, "Set Fee Collector", new_fee_collector)
+
+            # Ask if user wants to send the transaction
+            print()
+            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
+            if send_choice in ["y", "yes"]:
+                try:
+                    result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
+                    print()
+                    utils.success("Transaction sent successfully!")
+                    print()
+                    print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(result['transaction_hash'])}")
+                    if "block_number" in result:
+                        print(f"{utils.bold('Block Number:')} {result['block_number']}")
+                        status_text = "Success" if result['status'] == 1 else "Failed"
+                        status_color = utils.bold_green if result['status'] == 1 else utils.bold_red
+                        print(f"{utils.bold('Status:')} {status_color(status_text)}")
+                        print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
+                except Exception as e:
+                    utils.error(f"Failed to send transaction: {e}")
+            else:
+                utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
+        except Exception as e:
+            utils.error(f"Failed to create transaction: {e}")
+            return
+
+        input("\nPress Enter to return to the administrator menu...")
+
+    def transfer_ownership(self) -> None:
+        """Transfer ownership of a wPAC contract."""
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
+
+        # Get available wPAC contracts
+        contract_options = []
+        contract_map = {}
+        contract_name = "wpac"
+
+        for network in config.list_networks():
+            address = config.get_contract_address(contract_name, network, env_key)
+            if address:
+                display_name = f"wPAC on {config.get_network_display_name(network)}"
+                contract_options.append(display_name)
+                contract_map[display_name] = (contract_name, network)
+
+        if not contract_options:
+            utils.warn("No contracts found for the selected environment.")
+            input("\nPress Enter to return to the administrator menu...")
+            return
+
+        selected_display = self.prompt_choice("Select contract", contract_options)
+        contract_name, network = contract_map[selected_display]
+
+        contract_address = config.get_contract_address(contract_name, network, env_key)
+        rpc_endpoint = config.get_rpc_endpoint(network, env_key)
+
+        if not contract_address or not rpc_endpoint:
+            utils.warn("Contract address or RPC endpoint not found.")
+            input("\nPress Enter to return to the administrator menu...")
+            return
+
+        # Fetch current owner address
+        try:
+            contract_info = evm.get_wpac_info(contract_address, rpc_endpoint)
+            current_owner = contract_info.get("owner")
+            print()
+            if current_owner:
+                print(utils.bold_yellow(f"Current Owner Address: {current_owner}"))
+            else:
+                utils.warn("Could not fetch current owner address.")
+        except Exception as e:
+            utils.warn(f"Could not fetch current owner address: {e}")
+
+        print()
+        new_owner = input("Enter new owner address: ").strip()
+        if not new_owner:
+            utils.warn("Owner address is required.")
+            input("\nPress Enter to return to the administrator menu...")
+            return
+
+        # Offer Trezor signing option for both Mainnet and Testnet
+        use_trezor = False
+        owner_privkey = None
+        trezor_path = "m/44'/60'/0'/0/5"
+
+        print()
+        sign_method = self.prompt_choice(
+            "Select signing method",
+            ["Trezor Hardware Wallet", "Private Key"],
+        )
+        if sign_method == "Trezor Hardware Wallet":
+            use_trezor = True
+            print()
+            trezor_path_input = input(f"Enter Trezor derivation path (default: {trezor_path}): ").strip()
+            if trezor_path_input:
+                trezor_path = trezor_path_input
+            print()
+            utils.info("Please connect and unlock your Trezor device...")
+        else:
+            print()
+            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            if not owner_privkey:
+                utils.warn("Owner private key is required.")
+                input("\nPress Enter to return to the administrator menu...")
+                return
+
+        try:
+            signed_tx = evm.create_transfer_ownership_transaction(
+                contract_address,
+                new_owner,
+                owner_privkey,
+                rpc_endpoint,
+                use_trezor=use_trezor,
+                trezor_path=trezor_path,
+            )
+            self.print_signed_admin_transaction(signed_tx, network, environment, "Transfer Ownership", new_owner)
 
             # Ask if user wants to send the transaction
             print()
@@ -677,19 +812,37 @@ class HitchcockCLI:
 
         print()
 
-        # Display admin addresses
+        # Display admin addresses with balances
         if "owner" in contract_info and contract_info["owner"]:
-            print(f"Owner: {contract_info['owner']}")
+            owner_addr = contract_info["owner"]
+            if "owner_balance" in contract_info and contract_info["owner_balance"] is not None:
+                symbol = contract_info.get("owner_balance_symbol", "ETH")
+                balance = contract_info["owner_balance"]
+                print(f"Owner: {owner_addr} ({balance:.6f} {symbol})")
+            else:
+                print(f"Owner: {owner_addr} (Balance: N/A)")
         else:
             print("Owner: N/A")
 
         if "minter" in contract_info and contract_info["minter"]:
-            print(f"Minter: {contract_info['minter']}")
+            minter_addr = contract_info["minter"]
+            if "minter_balance" in contract_info and contract_info["minter_balance"] is not None:
+                symbol = contract_info.get("minter_balance_symbol", "ETH")
+                balance = contract_info["minter_balance"]
+                print(f"Minter: {minter_addr} ({balance:.6f} {symbol})")
+            else:
+                print(f"Minter: {minter_addr} (Balance: N/A)")
         else:
             print("Minter: N/A")
 
         if "fee_collector" in contract_info and contract_info["fee_collector"]:
-            print(f"Fee Collector: {contract_info['fee_collector']}")
+            fee_collector_addr = contract_info["fee_collector"]
+            if "fee_collector_balance" in contract_info and contract_info["fee_collector_balance"] is not None:
+                symbol = contract_info.get("fee_collector_balance_symbol", "ETH")
+                balance = contract_info["fee_collector_balance"]
+                print(f"Fee Collector: {fee_collector_addr} ({balance:.6f} {symbol})")
+            else:
+                print(f"Fee Collector: {fee_collector_addr} (Balance: N/A)")
         else:
             print("Fee Collector: N/A")
 
@@ -711,9 +864,9 @@ class HitchcockCLI:
         self.should_exit = True
 
 
-def main() -> int:
+def main(environment: str = "mainnet") -> int:
     """Main entry point."""
-    cli = HitchcockCLI()
+    cli = HitchcockCLI(environment)
     cli.run()
     return 0
 
