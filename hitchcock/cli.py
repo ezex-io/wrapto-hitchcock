@@ -21,7 +21,8 @@ class HitchcockCLI:
             "4": ("Show wPAC Info", self.show_wpac_info),
             "5": ("Create and Sign Wrap Transaction (PAC->wPAC)", self.create_wrap_transaction),
             "6": ("Create and Sign Unwrap Transaction (wPAC->PAC)", self.create_unwrap_transaction),
-            "7": ("Administrator Menu", self.administrator_menu),
+            "7": ("Dump All Bridges", self.dump_all_bridges),
+            "8": ("Administrator Menu", self.administrator_menu),
             "0": ("Exit", self.exit_program),
         }
         self.should_exit = False
@@ -316,12 +317,18 @@ class HitchcockCLI:
             "1": ("Set Minter Address", self.set_minter_address),
             "2": ("Set Fee Collector Address", self.set_fee_collector_address),
             "3": ("Transfer Ownership", self.transfer_ownership),
+            "4": ("Upgrade Proxy Implementation", self.upgrade_proxy_implementation),
         }
 
         # Convert admin_actions to simple dict for menu display
         menu_items = {key: label for key, (label, _) in admin_actions.items()}
         # Add "0" option for going back to main menu
         menu_items["0"] = "Back to Main Menu"
+
+        if self.environment == "mainnet":
+            print()
+            print(utils.bold_red("⚠ WARNING: You are connected to MAINNET."))
+            print(utils.bold_red("All administrator actions will affect live contracts."))
 
         choice = ""
         while choice != "0":
@@ -394,7 +401,7 @@ class HitchcockCLI:
         # Offer Trezor signing option for both Mainnet and Testnet
         use_trezor = False
         owner_privkey = None
-        trezor_path = "m/44'/60'/0'/0/5"
+        trezor_path = config.get_trezor_derivation_path()
 
         print()
         sign_method = self.prompt_choice(
@@ -509,7 +516,7 @@ class HitchcockCLI:
         # Offer Trezor signing option for both Mainnet and Testnet
         use_trezor = False
         owner_privkey = None
-        trezor_path = "m/44'/60'/0'/0/5"
+        trezor_path = config.get_trezor_derivation_path()
 
         print()
         sign_method = self.prompt_choice(
@@ -624,7 +631,7 @@ class HitchcockCLI:
         # Offer Trezor signing option for both Mainnet and Testnet
         use_trezor = False
         owner_privkey = None
-        trezor_path = "m/44'/60'/0'/0/5"
+        trezor_path = config.get_trezor_derivation_path()
 
         print()
         sign_method = self.prompt_choice(
@@ -684,6 +691,123 @@ class HitchcockCLI:
 
         input("\nPress Enter to return to the administrator menu...")
 
+    def upgrade_proxy_implementation(self) -> None:
+        """Upgrade the proxy implementation (set new logic contract)."""
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
+
+        contract_options = []
+        contract_map = {}
+        contract_name = "wpac"
+
+        for network in config.list_networks():
+            address = config.get_contract_address(contract_name, network, env_key)
+            if address:
+                display_name = f"wPAC on {config.get_network_display_name(network)}"
+                contract_options.append(display_name)
+                contract_map[display_name] = (contract_name, network)
+
+        if not contract_options:
+            utils.warn("No contracts found for the selected environment.")
+            input("\nPress Enter to return to the administrator menu...")
+            return
+
+        selected_display = self.prompt_choice("Select contract", contract_options)
+        contract_name, network = contract_map[selected_display]
+
+        contract_address = config.get_contract_address(contract_name, network, env_key)
+        rpc_endpoint = config.get_rpc_endpoint(network, env_key)
+
+        if not contract_address or not rpc_endpoint:
+            utils.warn("Contract address or RPC endpoint not found.")
+            input("\nPress Enter to return to the administrator menu...")
+            return
+
+        try:
+            contract_info = evm.get_wpac_info(contract_address, rpc_endpoint)
+            current_impl = contract_info.get("implementation_address")
+            print()
+            if current_impl:
+                print(utils.bold_yellow(f"Current Implementation Address: {current_impl}"))
+            else:
+                utils.warn("Could not fetch current implementation address.")
+        except Exception as e:
+            utils.warn(f"Could not fetch current implementation address: {e}")
+
+        print()
+        new_impl = input("Enter new implementation address: ").strip()
+        if not new_impl:
+            utils.warn("Implementation address is required.")
+            input("\nPress Enter to return to the administrator menu...")
+            return
+
+        use_trezor = False
+        owner_privkey = None
+        trezor_path = config.get_trezor_derivation_path()
+
+        print()
+        sign_method = self.prompt_choice(
+            "Select signing method",
+            ["Trezor Hardware Wallet", "Private Key"],
+        )
+        if sign_method == "Trezor Hardware Wallet":
+            use_trezor = True
+            print()
+            trezor_path_input = input(f"Enter Trezor derivation path (default: {trezor_path}): ").strip()
+            if trezor_path_input:
+                trezor_path = trezor_path_input
+            print()
+            utils.info("Please connect and unlock your Trezor device...")
+        else:
+            print()
+            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            if not owner_privkey:
+                utils.warn("Owner private key is required.")
+                input("\nPress Enter to return to the administrator menu...")
+                return
+
+        try:
+            signed_tx = evm.create_upgrade_to_transaction(
+                contract_address,
+                new_impl,
+                owner_privkey,
+                rpc_endpoint,
+                use_trezor=use_trezor,
+                trezor_path=trezor_path,
+            )
+            self.print_signed_admin_transaction(
+                signed_tx,
+                network,
+                environment,
+                "Upgrade Proxy Implementation",
+                new_impl,
+            )
+
+            print()
+            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
+            if send_choice in ["y", "yes"]:
+                try:
+                    result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
+                    print()
+                    utils.success("Transaction sent successfully!")
+                    print()
+                    print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(result['transaction_hash'])}")
+                    if "block_number" in result:
+                        print(f"{utils.bold('Block Number:')} {result['block_number']}")
+                        status_text = "Success" if result['status'] == 1 else "Failed"
+                        status_color = utils.bold_green if result['status'] == 1 else utils.bold_red
+                        print(f"{utils.bold('Status:')} {status_color(status_text)}")
+                        print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
+                except Exception as e:
+                    utils.error(f"Failed to send transaction: {e}")
+            else:
+                utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
+        except Exception as e:
+            utils.error(f"Failed to create transaction: {e}")
+            return
+
+        input("\nPress Enter to return to the administrator menu...")
+
     def print_signed_admin_transaction(
         self, signed_tx: Dict[str, Any], network: str, environment: str, action: str, new_address: str
     ) -> None:
@@ -698,6 +822,8 @@ class HitchcockCLI:
             label = "New Minter Address:"
         elif "Fee Collector" in action:
             label = "New Fee Collector Address:"
+        elif "Implementation" in action:
+            label = "New Implementation Address:"
         else:
             label = "New Address:"
 
@@ -812,6 +938,13 @@ class HitchcockCLI:
 
         print()
 
+        if contract_info.get("implementation_address"):
+            print(f"Implementation Address: {contract_info['implementation_address']}")
+        else:
+            print("Implementation Address: N/A")
+
+        print()
+
         # Display admin addresses with balances
         if "owner" in contract_info and contract_info["owner"]:
             owner_addr = contract_info["owner"]
@@ -857,6 +990,78 @@ class HitchcockCLI:
             print(f"Collected Fee: {contract_info['collected_fee']:.{config.WPAC_DECIMALS}f} wPAC")
         else:
             print("Collected Fee: N/A")
+
+    def dump_all_bridges(self) -> None:
+        """Dump all bridges from the bridge contract."""
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
+
+        # Get network selection
+        network = self.prompt_choice(
+            "Select network",
+            ["Polygon", "Binance Smart Chain", "Base"],
+        )
+
+        # Map display name to network key
+        network_map = {
+            "Polygon": "polygon",
+            "Binance Smart Chain": "bsc",
+            "Base": "base",
+        }
+        network_key = network_map[network]
+
+        # Get RPC endpoint
+        rpc_endpoint = config.get_rpc_endpoint(network_key, env_key)
+        if not rpc_endpoint:
+            utils.warn("RPC endpoint not found for the selected network.")
+            input("\nPress Enter to return to the main menu...")
+            return
+
+        # Get contract address from config (same as wpac contract)
+        contract_address = config.get_contract_address("wpac", network_key, env_key)
+        if not contract_address:
+            utils.warn("Contract address not found for the selected network.")
+            input("\nPress Enter to return to the main menu...")
+            return
+
+        try:
+            utils.info(f"Fetching bridges from contract {contract_address}...")
+            bridges = evm.dump_all_bridges(contract_address, rpc_endpoint)
+
+            if not bridges:
+                utils.warn("No bridges found.")
+                input("\nPress Enter to return to the main menu...")
+                return
+
+            # Log total bridges count
+            total_bridges = len(bridges)
+            utils.info(f"Total Bridges: {total_bridges}")
+
+            # Display bridges
+            print()
+            print(utils.bold_cyan(f"[Bridge Dump] {config.get_network_display_name(network_key)} ({environment})"))
+            print()
+            print(utils.bold_yellow(f"Total Bridges: {total_bridges}"))
+            print()
+
+            for bridge in bridges:
+                if "error" in bridge:
+                    bridge_label = utils.bold_red(f"Bridge #{bridge['index']}:")
+                    print(f"{bridge_label} Error - {bridge['error']}")
+                else:
+                    bridge_label = utils.bold(f"Bridge #{bridge['index']}:")
+                    print(bridge_label)
+                    print(f"  {utils.bold('Sender:')} {bridge['sender']}")
+                    print(f"  {utils.bold('Amount:')} {bridge['amount']}")
+                    print(f"  {utils.bold('Destination Address:')} {bridge['destinationAddress']}")
+                    print(f"  {utils.bold('Fee:')} {bridge['fee']}")
+                print()
+
+        except Exception as e:
+            utils.error(f"Failed to dump bridges: {e}")
+            return
+
+        input("\nPress Enter to return to the main menu...")
 
     def exit_program(self) -> None:
         """Exit the program."""

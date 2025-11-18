@@ -1,17 +1,21 @@
 """EVM blockchain operations."""
 
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 from eth_account import Account
 from eth_keys import keys
 from web3 import Web3
 
-from hitchcock import config
+from hitchcock import config, utils
 from hitchcock.models import Credentials
 from trezorlib import ethereum, tools
 from trezorlib.transport import get_transport
 from trezorlib.client import TrezorClient
 from trezorlib.ui import ClickUI
+
+EIP1967_IMPLEMENTATION_SLOT = int(
+    "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", 16
+)
 
 
 class TrezorPINUI(ClickUI):
@@ -258,6 +262,21 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
         except Exception:
             info["fee_collector"] = None
 
+        # Resolve the implementation (logic) contract behind the proxy
+        try:
+            slot_value = w3.eth.get_storage_at(
+                Web3.to_checksum_address(contract_address),
+                EIP1967_IMPLEMENTATION_SLOT,
+            )
+
+            if slot_value and any(slot_value[-20:]):
+                implementation_hex = "0x" + slot_value[-20:].hex()
+                info["implementation_address"] = Web3.to_checksum_address(implementation_hex)
+            else:
+                info["implementation_address"] = None
+        except Exception:
+            info["implementation_address"] = None
+
         # Get native token balances for admin addresses
         chain_id = w3.eth.chain_id
         native_symbol = _get_native_token_symbol(chain_id)
@@ -313,14 +332,14 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
 
 def sign_transaction_with_trezor(
     transaction: Dict[str, Any],
-    derivation_path: str = "m/44'/60'/0'/0/5",
+    derivation_path: str,
 ) -> bytes:
     """
     Sign a transaction using Trezor hardware wallet.
 
     Args:
         transaction: Unsigned transaction dictionary
-        derivation_path: BIP44 derivation path (default: m/44'/60'/0'/0/5)
+        derivation_path: BIP44 derivation path
 
     Returns:
         Signed transaction bytes
@@ -449,21 +468,27 @@ def sign_transaction_with_trezor(
         raise ValueError(detailed_error)
 
 
-def create_set_minter_transaction(
-    contract_address: str,
-    new_minter: str,
-    owner_privkey: Optional[str] = None,
-    rpc_endpoint: str = "",
-    use_trezor: bool = False,
-    trezor_path: str = "m/44'/60'/0'/0/5",
-) -> Dict[str, Any]:
-    """Create and sign a transaction to set the minter address."""
+def _connect_web3(rpc_endpoint: str) -> Web3:
+    """Return a connected Web3 instance or raise if unreachable."""
     w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
 
     if not w3.is_connected():
         raise ConnectionError("Failed to connect to RPC endpoint")
 
-    # Get owner address - either from Trezor or private key
+    return w3
+
+
+def _get_owner_context(
+    owner_privkey: Optional[str],
+    use_trezor: bool,
+    trezor_path: str,
+) -> tuple[str, Optional[bytes]]:
+    """
+    Resolve the signing address and optional private key bytes.
+
+    Returns:
+        Tuple of (owner_address, private_key_bytes or None when using Trezor)
+    """
     if use_trezor:
         try:
             transport = get_transport()
@@ -486,25 +511,125 @@ def create_set_minter_transaction(
                 f"Failed to get address from Trezor: {e}\n"
                 "Please ensure your Trezor device is unlocked and ready."
             )
-    else:
-        if not owner_privkey:
-            raise ValueError("Private key is required when not using Trezor")
-        # Remove 0x prefix from private key if present
-        if owner_privkey.startswith("0x"):
-            owner_privkey = owner_privkey[2:]
+        return owner_address, None
 
-        try:
-            private_key_bytes = bytes.fromhex(owner_privkey)
-        except ValueError:
-            raise ValueError("Invalid hex format for private key.")
+    if not owner_privkey:
+        raise ValueError("Private key is required when not using Trezor")
 
-        if len(private_key_bytes) != 32:
-            raise ValueError("Private key must be 32 bytes (64 hex characters).")
+    clean_privkey = owner_privkey[2:] if owner_privkey.startswith("0x") else owner_privkey
 
-        account = Account.from_key(private_key_bytes)
-        owner_address = account.address
+    try:
+        private_key_bytes = bytes.fromhex(clean_privkey)
+    except ValueError:
+        raise ValueError("Invalid hex format for private key.")
 
-    # wPAC contract ABI for setMinter function
+    if len(private_key_bytes) != 32:
+        raise ValueError("Private key must be 32 bytes (64 hex characters).")
+
+    account = Account.from_key(private_key_bytes)
+    return account.address, private_key_bytes
+
+
+def _build_contract_transaction(
+    w3: Web3,
+    contract_address: str,
+    owner_address: str,
+    contract_abi: List[Dict[str, Any]],
+    function_builder: Callable[[Any], Any],
+) -> Dict[str, Any]:
+    """Build a contract transaction after estimating gas."""
+    try:
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=contract_abi,
+        )
+
+        contract_function = function_builder(contract)
+
+        gas_estimate = contract_function.estimate_gas({"from": owner_address})
+
+        chain_id = w3.eth.chain_id
+        utils.info(f"Chain ID: {chain_id}")
+
+        tx_params = {
+            "from": owner_address,
+            "nonce": w3.eth.get_transaction_count(owner_address),
+            "gas": int(gas_estimate * 1.2),
+            "chainId": chain_id,
+        }
+
+        current_gas_price = w3.eth.gas_price
+        tx_params["gasPrice"] = current_gas_price
+        utils.info("Using legacy transaction")
+        utils.info(f"  Gas Price: {current_gas_price}")
+
+        transaction = contract_function.build_transaction(tx_params)
+        return transaction
+    except Exception as e:
+        raise ValueError(f"Failed to build transaction: {e}")
+
+
+def _sign_transaction_payload(
+    transaction: Dict[str, Any],
+    w3: Web3,
+    contract_address: str,
+    use_trezor: bool,
+    trezor_path: str,
+    private_key_bytes: Optional[bytes],
+) -> Dict[str, str]:
+    """Sign a transaction dictionary and return a unified response payload."""
+    try:
+        if use_trezor:
+            signed_bytes = sign_transaction_with_trezor(transaction, trezor_path)
+            tx_hash = Web3.keccak(signed_bytes).hex()
+            raw_transaction = signed_bytes.hex()
+        else:
+            if private_key_bytes is None:
+                raise ValueError("Private key bytes are required when not using Trezor")
+            signed_txn = w3.eth.account.sign_transaction(transaction, private_key_bytes)
+            raw_transaction = signed_txn.raw_transaction.hex()
+            tx_hash = signed_txn.hash.hex()
+
+        return {
+            "contract_address": contract_address,
+            "raw_transaction": raw_transaction,
+            "transaction_hash": tx_hash,
+        }
+    except Exception as e:
+        raise ValueError(f"Failed to sign transaction: {e}")
+
+
+def _create_admin_transaction(
+    contract_address: str,
+    rpc_endpoint: str,
+    owner_privkey: Optional[str],
+    use_trezor: bool,
+    trezor_path: str,
+    contract_abi: List[Dict[str, Any]],
+    function_builder: Callable[[Any], Any],
+) -> Dict[str, Any]:
+    """Shared flow for admin transactions that mutate wPAC contract roles."""
+    w3 = _connect_web3(rpc_endpoint)
+    owner_address, private_key_bytes = _get_owner_context(owner_privkey, use_trezor, trezor_path)
+    transaction = _build_contract_transaction(
+        w3,
+        contract_address,
+        owner_address,
+        contract_abi,
+        function_builder,
+    )
+    return _sign_transaction_payload(transaction, w3, contract_address, use_trezor, trezor_path, private_key_bytes)
+
+
+def create_set_minter_transaction(
+    contract_address: str,
+    new_minter: str,
+    owner_privkey: Optional[str] = None,
+    rpc_endpoint: str = "",
+    use_trezor: bool = False,
+    trezor_path: str = "",
+) -> Dict[str, Any]:
+    """Create and sign a transaction to set the minter address."""
     wpac_abi = [
         {
             "constant": False,
@@ -515,62 +640,17 @@ def create_set_minter_transaction(
         },
     ]
 
-    contract = w3.eth.contract(
-        address=Web3.to_checksum_address(contract_address),
-        abi=wpac_abi,
+    minter_address = Web3.to_checksum_address(new_minter)
+
+    return _create_admin_transaction(
+        contract_address=contract_address,
+        rpc_endpoint=rpc_endpoint,
+        owner_privkey=owner_privkey,
+        use_trezor=use_trezor,
+        trezor_path=trezor_path,
+        contract_abi=wpac_abi,
+        function_builder=lambda contract: contract.functions.setMinter(minter_address),
     )
-
-    # Build transaction
-    try:
-        # Estimate gas first
-        gas_estimate = contract.functions.setMinter(Web3.to_checksum_address(new_minter)).estimate_gas(
-            {"from": owner_address}
-        )
-
-        # Get chain ID from RPC (always fetch from the connected node)
-        chain_id = w3.eth.chain_id
-
-        # Debug information for developers
-        from hitchcock import utils
-        utils.info(f"Chain ID: {chain_id}")
-
-        # Build transaction parameters - Legacy transactions
-        tx_params = {
-            "from": owner_address,
-            "nonce": w3.eth.get_transaction_count(owner_address),
-            "gas": int(gas_estimate * 1.2),  # Add 20% buffer
-            "chainId": chain_id,
-        }
-
-        # Use legacy transactions (gasPrice)
-        current_gas_price = w3.eth.gas_price
-        tx_params["gasPrice"] = current_gas_price
-        utils.info(f"Using legacy transaction")
-        utils.info(f"  Gas Price: {current_gas_price}")
-
-        transaction = contract.functions.setMinter(Web3.to_checksum_address(new_minter)).build_transaction(tx_params)
-    except Exception as e:
-        raise ValueError(f"Failed to build transaction: {e}")
-
-    # Sign transaction
-    try:
-        if use_trezor:
-            signed_bytes = sign_transaction_with_trezor(transaction, trezor_path)
-            tx_hash = Web3.keccak(signed_bytes).hex()
-            return {
-                "contract_address": contract_address,
-                "raw_transaction": signed_bytes.hex(),
-                "transaction_hash": tx_hash,
-            }
-        else:
-            signed_txn = w3.eth.account.sign_transaction(transaction, private_key_bytes)
-            return {
-                "contract_address": contract_address,
-                "raw_transaction": signed_txn.raw_transaction.hex(),
-                "transaction_hash": signed_txn.hash.hex(),
-            }
-    except Exception as e:
-        raise ValueError(f"Failed to sign transaction: {e}")
 
 
 def send_transaction(raw_transaction_hex: str, rpc_endpoint: str) -> Dict[str, Any]:
@@ -597,7 +677,6 @@ def send_transaction(raw_transaction_hex: str, rpc_endpoint: str) -> Dict[str, A
         try:
             if hasattr(w3.eth, 'decode_transaction'):
                 decoded_tx = w3.eth.decode_transaction(raw_tx_bytes)
-                from hitchcock import utils
                 utils.info(f"Transaction decoded successfully:")
                 utils.info(f"  From: {decoded_tx.get('from')}")
                 utils.info(f"  To: {decoded_tx.get('to')}")
@@ -654,56 +733,9 @@ def create_set_fee_collector_transaction(
     owner_privkey: Optional[str] = None,
     rpc_endpoint: str = "",
     use_trezor: bool = False,
-    trezor_path: str = "m/44'/60'/0'/0/5",
+    trezor_path: str = "",
 ) -> Dict[str, Any]:
     """Create and sign a transaction to set the fee collector address."""
-    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
-
-    if not w3.is_connected():
-        raise ConnectionError("Failed to connect to RPC endpoint")
-
-    # Get owner address - either from Trezor or private key
-    if use_trezor:
-        try:
-            transport = get_transport()
-        except Exception as e:
-            raise ValueError(
-                f"Failed to connect to Trezor device: {e}\n"
-                "Please ensure your Trezor device is:\n"
-                "  - Connected via USB\n"
-                "  - Unlocked\n"
-                "  - Has the Ethereum app open (if using Trezor Model T)"
-            )
-        try:
-            ui = TrezorPINUI()
-            client = TrezorClient(transport, ui=ui)
-            address_n = tools.parse_path(trezor_path)
-            owner_address = ethereum.get_address(client, address_n, show_display=False)
-            owner_address = Web3.to_checksum_address(owner_address)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to get address from Trezor: {e}\n"
-                "Please ensure your Trezor device is unlocked and ready."
-            )
-    else:
-        if not owner_privkey:
-            raise ValueError("Private key is required when not using Trezor")
-        # Remove 0x prefix from private key if present
-        if owner_privkey.startswith("0x"):
-            owner_privkey = owner_privkey[2:]
-
-        try:
-            private_key_bytes = bytes.fromhex(owner_privkey)
-        except ValueError:
-            raise ValueError("Invalid hex format for private key.")
-
-        if len(private_key_bytes) != 32:
-            raise ValueError("Private key must be 32 bytes (64 hex characters).")
-
-        account = Account.from_key(private_key_bytes)
-        owner_address = account.address
-
-    # wPAC contract ABI for setFeeCollector function
     wpac_abi = [
         {
             "constant": False,
@@ -714,62 +746,17 @@ def create_set_fee_collector_transaction(
         },
     ]
 
-    contract = w3.eth.contract(
-        address=Web3.to_checksum_address(contract_address),
-        abi=wpac_abi,
+    collector_address = Web3.to_checksum_address(new_fee_collector)
+
+    return _create_admin_transaction(
+        contract_address=contract_address,
+        rpc_endpoint=rpc_endpoint,
+        owner_privkey=owner_privkey,
+        use_trezor=use_trezor,
+        trezor_path=trezor_path,
+        contract_abi=wpac_abi,
+        function_builder=lambda contract: contract.functions.setFeeCollector(collector_address),
     )
-
-    # Build transaction
-    try:
-        # Estimate gas first
-        gas_estimate = contract.functions.setFeeCollector(Web3.to_checksum_address(new_fee_collector)).estimate_gas(
-            {"from": owner_address}
-        )
-
-        # Get chain ID from RPC (always fetch from the connected node)
-        chain_id = w3.eth.chain_id
-
-        # Debug information for developers
-        from hitchcock import utils
-        utils.info(f"Chain ID: {chain_id}")
-
-        # Build transaction parameters - Legacy transactions
-        tx_params = {
-            "from": owner_address,
-            "nonce": w3.eth.get_transaction_count(owner_address),
-            "gas": int(gas_estimate * 1.2),  # Add 20% buffer
-            "chainId": chain_id,
-        }
-
-        # Use legacy transactions (gasPrice)
-        current_gas_price = w3.eth.gas_price
-        tx_params["gasPrice"] = current_gas_price
-        utils.info(f"Using legacy transaction")
-        utils.info(f"  Gas Price: {current_gas_price}")
-
-        transaction = contract.functions.setFeeCollector(Web3.to_checksum_address(new_fee_collector)).build_transaction(tx_params)
-    except Exception as e:
-        raise ValueError(f"Failed to build transaction: {e}")
-
-    # Sign transaction
-    try:
-        if use_trezor:
-            signed_bytes = sign_transaction_with_trezor(transaction, trezor_path)
-            tx_hash = Web3.keccak(signed_bytes).hex()
-            return {
-                "contract_address": contract_address,
-                "raw_transaction": signed_bytes.hex(),
-                "transaction_hash": tx_hash,
-            }
-        else:
-            signed_txn = w3.eth.account.sign_transaction(transaction, private_key_bytes)
-            return {
-                "contract_address": contract_address,
-                "raw_transaction": signed_txn.raw_transaction.hex(),
-                "transaction_hash": signed_txn.hash.hex(),
-            }
-    except Exception as e:
-        raise ValueError(f"Failed to sign transaction: {e}")
 
 
 def create_transfer_ownership_transaction(
@@ -778,56 +765,9 @@ def create_transfer_ownership_transaction(
     owner_privkey: Optional[str] = None,
     rpc_endpoint: str = "",
     use_trezor: bool = False,
-    trezor_path: str = "m/44'/60'/0'/0/5",
+    trezor_path: str = "",
 ) -> Dict[str, Any]:
     """Create and sign a transaction to transfer ownership."""
-    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
-
-    if not w3.is_connected():
-        raise ConnectionError("Failed to connect to RPC endpoint")
-
-    # Get owner address - either from Trezor or private key
-    if use_trezor:
-        try:
-            transport = get_transport()
-        except Exception as e:
-            raise ValueError(
-                f"Failed to connect to Trezor device: {e}\n"
-                "Please ensure your Trezor device is:\n"
-                "  - Connected via USB\n"
-                "  - Unlocked\n"
-                "  - Has the Ethereum app open (if using Trezor Model T)"
-            )
-        try:
-            ui = TrezorPINUI()
-            client = TrezorClient(transport, ui=ui)
-            address_n = tools.parse_path(trezor_path)
-            owner_address = ethereum.get_address(client, address_n, show_display=False)
-            owner_address = Web3.to_checksum_address(owner_address)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to get address from Trezor: {e}\n"
-                "Please ensure your Trezor device is unlocked and ready."
-            )
-    else:
-        if not owner_privkey:
-            raise ValueError("Private key is required when not using Trezor")
-        # Remove 0x prefix from private key if present
-        if owner_privkey.startswith("0x"):
-            owner_privkey = owner_privkey[2:]
-
-        try:
-            private_key_bytes = bytes.fromhex(owner_privkey)
-        except ValueError:
-            raise ValueError("Invalid hex format for private key.")
-
-        if len(private_key_bytes) != 32:
-            raise ValueError("Private key must be 32 bytes (64 hex characters).")
-
-        account = Account.from_key(private_key_bytes)
-        owner_address = account.address
-
-    # wPAC contract ABI for transferOwnership function
     wpac_abi = [
         {
             "constant": False,
@@ -838,60 +778,162 @@ def create_transfer_ownership_transaction(
         },
     ]
 
-    contract = w3.eth.contract(
-        address=Web3.to_checksum_address(contract_address),
-        abi=wpac_abi,
+    new_owner_address = Web3.to_checksum_address(new_owner)
+
+    return _create_admin_transaction(
+        contract_address=contract_address,
+        rpc_endpoint=rpc_endpoint,
+        owner_privkey=owner_privkey,
+        use_trezor=use_trezor,
+        trezor_path=trezor_path,
+        contract_abi=wpac_abi,
+        function_builder=lambda contract: contract.functions.transferOwnership(new_owner_address),
     )
 
-    # Build transaction
+
+def create_upgrade_to_transaction(
+    contract_address: str,
+    new_implementation: str,
+    owner_privkey: Optional[str] = None,
+    rpc_endpoint: str = "",
+    use_trezor: bool = False,
+    trezor_path: str = "",
+) -> Dict[str, Any]:
+    """Create and sign a transaction to upgrade the proxy implementation."""
+    proxy_abi = [
+        {
+            "constant": False,
+            "inputs": [{"name": "newImplementation", "type": "address"}],
+            "name": "upgradeTo",
+            "outputs": [],
+            "type": "function",
+        },
+    ]
+
+    implementation_address = Web3.to_checksum_address(new_implementation)
+
+    return _create_admin_transaction(
+        contract_address=contract_address,
+        rpc_endpoint=rpc_endpoint,
+        owner_privkey=owner_privkey,
+        use_trezor=use_trezor,
+        trezor_path=trezor_path,
+        contract_abi=proxy_abi,
+        function_builder=lambda contract: contract.functions.upgradeTo(implementation_address),
+    )
+
+
+def get_bridge_counter(contract_address: str, rpc_endpoint: str) -> int:
+    """
+    Get the counter value from the bridge contract.
+
+    Args:
+        contract_address: Address of the bridge contract
+        rpc_endpoint: RPC endpoint URL
+
+    Returns:
+        Counter value as integer
+    """
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+
+    if not w3.is_connected():
+        raise ConnectionError("Failed to connect to RPC endpoint")
+
+    # Bridge contract ABI for counter property/function
+    bridge_abi = [
+        {
+            "constant": True,
+            "inputs": [],
+            "name": "counter",
+            "outputs": [{"name": "", "type": "uint256"}],
+            "type": "function",
+        },
+    ]
+
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(contract_address),
+        abi=bridge_abi,
+    )
+
     try:
-        # Estimate gas first
-        gas_estimate = contract.functions.transferOwnership(Web3.to_checksum_address(new_owner)).estimate_gas(
-            {"from": owner_address}
-        )
+        counter = contract.functions.counter().call()
+        return counter
+    except Exception as e:
+        raise ValueError(f"Failed to get counter: {e}")
 
-        # Get chain ID from RPC (always fetch from the connected node)
-        chain_id = w3.eth.chain_id
 
-        # Debug information for developers
-        from hitchcock import utils
-        utils.info(f"Chain ID: {chain_id}")
+def get_bridge_data(contract_address: str, rpc_endpoint: str, index: int) -> Dict[str, Any]:
+    """
+    Get bridge data for a specific index.
 
-        # Build transaction parameters - Legacy transactions
-        tx_params = {
-            "from": owner_address,
-            "nonce": w3.eth.get_transaction_count(owner_address),
-            "gas": int(gas_estimate * 1.2),  # Add 20% buffer
-            "chainId": chain_id,
+    Args:
+        contract_address: Address of the bridge contract
+        rpc_endpoint: RPC endpoint URL
+        index: Bridge index (0-based)
+
+    Returns:
+        Dictionary with bridge data: sender, amount, destinationAddress, fee
+    """
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+
+    if not w3.is_connected():
+        raise ConnectionError("Failed to connect to RPC endpoint")
+
+    # Bridge contract ABI for bridged function
+    bridge_abi = [
+        {
+            "constant": True,
+            "inputs": [{"name": "", "type": "uint256"}],
+            "name": "bridged",
+            "outputs": [
+                {"name": "sender", "type": "address"},
+                {"name": "amount", "type": "uint256"},
+                {"name": "destinationAddress", "type": "string"},
+                {"name": "fee", "type": "uint256"},
+            ],
+            "type": "function",
+        },
+    ]
+
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(contract_address),
+        abi=bridge_abi,
+    )
+
+    try:
+        result = contract.functions.bridged(index).call()
+        return {
+            "sender": result[0],
+            "amount": result[1],
+            "destinationAddress": result[2],
+            "fee": result[3],
         }
-
-        # Use legacy transactions (gasPrice)
-        current_gas_price = w3.eth.gas_price
-        tx_params["gasPrice"] = current_gas_price
-        utils.info(f"Using legacy transaction")
-        utils.info(f"  Gas Price: {current_gas_price}")
-
-        transaction = contract.functions.transferOwnership(Web3.to_checksum_address(new_owner)).build_transaction(tx_params)
     except Exception as e:
-        raise ValueError(f"Failed to build transaction: {e}")
+        raise ValueError(f"Failed to get bridge data for index {index}: {e}")
 
-    # Sign transaction
-    try:
-        if use_trezor:
-            signed_bytes = sign_transaction_with_trezor(transaction, trezor_path)
-            tx_hash = Web3.keccak(signed_bytes).hex()
-            return {
-                "contract_address": contract_address,
-                "raw_transaction": signed_bytes.hex(),
-                "transaction_hash": tx_hash,
-            }
-        else:
-            signed_txn = w3.eth.account.sign_transaction(transaction, private_key_bytes)
-            return {
-                "contract_address": contract_address,
-                "raw_transaction": signed_txn.raw_transaction.hex(),
-                "transaction_hash": signed_txn.hash.hex(),
-            }
-    except Exception as e:
-        raise ValueError(f"Failed to sign transaction: {e}")
+
+def dump_all_bridges(contract_address: str, rpc_endpoint: str) -> List[Dict[str, Any]]:
+    """
+    Dump all bridges from index 0 to counter-1.
+
+    Args:
+        contract_address: Address of the bridge contract
+        rpc_endpoint: RPC endpoint URL
+
+    Returns:
+        List of bridge data dictionaries
+    """
+    counter = get_bridge_counter(contract_address, rpc_endpoint)
+    bridges = []
+
+    for i in range(counter):
+        try:
+            bridge_data = get_bridge_data(contract_address, rpc_endpoint, i)
+            bridge_data["index"] = i
+            bridges.append(bridge_data)
+        except Exception as e:
+            # Continue even if one bridge fails
+            bridges.append({"index": i, "error": str(e)})
+
+    return bridges
 

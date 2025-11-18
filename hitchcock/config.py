@@ -176,3 +176,8 @@ def get_wrapto_address(environment: str = "mainnet", address_type: str = "deposi
 # wPAC token configuration
 WPAC_DECIMALS = 9  # Fixed decimal places for wPAC token
 
+
+def get_trezor_derivation_path() -> str:
+    """Get default Trezor derivation path from environment."""
+    return get_env("TREZOR_DERIVATION_PATH", "m/44'/60'/0'/0/0")
+
