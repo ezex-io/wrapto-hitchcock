@@ -18,9 +18,9 @@ class HitchcockCLI:
             "1": ("Generate private key", self.generate_private_key),
             "2": ("Get Address from Private key", self.get_address_from_private_key),
             "3": ("Show PAC Info", self.show_pac_info),
-            "4": ("Show wPAC Info", self.show_wpac_info),
-            "5": ("Create and Sign Wrap Transaction (PAC->wPAC)", self.create_wrap_transaction),
-            "6": ("Create and Sign Unwrap Transaction (wPAC->PAC)", self.create_unwrap_transaction),
+            "4": ("Show WPAC Info", self.show_wpac_info),
+            "5": ("Create and Sign Wrap Transaction (PAC->WPAC)", self.create_wrap_transaction),
+            "6": ("Create and Sign Unwrap Transaction (WPAC->PAC)", self.create_unwrap_transaction),
             "7": ("Dump All Bridges", self.dump_all_bridges),
             "8": ("Administrator Menu", self.administrator_menu),
             "0": ("Exit", self.exit_program),
@@ -133,7 +133,7 @@ class HitchcockCLI:
         input("\nPress Enter to return to the main menu...")
 
     def create_wrap_transaction(self) -> None:
-        """Create and sign a wrap transaction (PAC->wPAC)."""
+        """Create and sign a wrap transaction (PAC->WPAC)."""
         environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
         env_key = self.environment
         is_testnet = env_key == "testnet"
@@ -233,11 +233,11 @@ class HitchcockCLI:
         input("\nPress Enter to return to the main menu...")
 
     def show_wpac_info(self) -> None:
-        """Show wPAC (ERC-20 token) information."""
+        """Show WPAC (ERC-20 token) information."""
         environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
         env_key = self.environment
 
-        # Calculate total wPAC supply across all networks and fetch individual supplies
+        # Calculate total WPAC supply across all networks and fetch individual supplies
         total_supply = 0.0
         contract_name = "wpac"
         network_supplies = {}  # Store supply for each network
@@ -257,13 +257,13 @@ class HitchcockCLI:
                 except Exception:
                     network_supplies[network] = None  # Mark as unavailable
 
-        # Display total wPAC supply in bold and yellow
+        # Display total WPAC supply in bold and yellow
         if total_supply > 0:
             print()
-            print(utils.bold_yellow(f"Total Supply: {total_supply:.9f} wPAC"))
+            print(utils.bold_yellow(f"Total Supply: {total_supply:.9f} WPAC"))
             print()
 
-        # Get available wPAC contracts with supply information
+        # Get available WPAC contracts with supply information
         contract_options = []
         contract_map = {}
 
@@ -274,9 +274,9 @@ class HitchcockCLI:
                 supply = network_supplies.get(network)
                 if supply is not None:
                     # Use fixed decimals from config
-                    display_name = f"wPAC on {config.get_network_display_name(network)} ({supply:.{config.WPAC_DECIMALS}f} wPAC)"
+                    display_name = f"WPAC on {config.get_network_display_name(network)} ({supply:.{config.WPAC_DECIMALS}f} WPAC)"
                 else:
-                    display_name = f"wPAC on {config.get_network_display_name(network)} (N/A)"
+                    display_name = f"WPAC on {config.get_network_display_name(network)} (N/A)"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -300,19 +300,19 @@ class HitchcockCLI:
             contract_info = evm.get_wpac_info(contract_address, rpc_endpoint)
             self.print_wpac_info(network, environment, contract_address, contract_info)
         except Exception as e:
-            utils.error(f"Failed to fetch wPAC info: {e}")
+            utils.error(f"Failed to fetch WPAC info: {e}")
             return
 
         input("\nPress Enter to return to the main menu...")
 
     def create_unwrap_transaction(self) -> None:
-        """Create and sign an unwrap transaction (wPAC->PAC)."""
+        """Create and sign an unwrap transaction (WPAC->PAC)."""
         utils.warn("Unwrap transaction functionality not yet implemented.")
-        utils.warn("This will require EVM transaction (burning wPAC) to trigger Pactus transaction.")
+        utils.warn("This will require EVM transaction (burning WPAC) to trigger Pactus transaction.")
         input("\nPress Enter to return to the main menu...")
 
     def administrator_menu(self) -> None:
-        """Administrator menu for wPAC contract management."""
+        """Administrator menu for WPAC contract management."""
         admin_actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Set Minter Address", self.set_minter_address),
             "2": ("Set Fee Collector Address", self.set_fee_collector_address),
@@ -347,11 +347,11 @@ class HitchcockCLI:
                 utils.warn(f"Unknown choice: {choice!r}")
 
     def set_minter_address(self) -> None:
-        """Set the minter address for a wPAC contract."""
+        """Set the minter address for a WPAC contract."""
         environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
         env_key = self.environment
 
-        # Get available wPAC contracts
+        # Get available WPAC contracts
         contract_options = []
         contract_map = {}
         contract_name = "wpac"
@@ -359,7 +359,7 @@ class HitchcockCLI:
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             if address:
-                display_name = f"wPAC on {config.get_network_display_name(network)}"
+                display_name = f"WPAC on {config.get_network_display_name(network)}"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -462,11 +462,11 @@ class HitchcockCLI:
         input("\nPress Enter to return to the administrator menu...")
 
     def set_fee_collector_address(self) -> None:
-        """Set the fee collector address for a wPAC contract."""
+        """Set the fee collector address for a WPAC contract."""
         environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
         env_key = self.environment
 
-        # Get available wPAC contracts
+        # Get available WPAC contracts
         contract_options = []
         contract_map = {}
         contract_name = "wpac"
@@ -474,7 +474,7 @@ class HitchcockCLI:
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             if address:
-                display_name = f"wPAC on {config.get_network_display_name(network)}"
+                display_name = f"WPAC on {config.get_network_display_name(network)}"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -577,11 +577,11 @@ class HitchcockCLI:
         input("\nPress Enter to return to the administrator menu...")
 
     def transfer_ownership(self) -> None:
-        """Transfer ownership of a wPAC contract."""
+        """Transfer ownership of a WPAC contract."""
         environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
         env_key = self.environment
 
-        # Get available wPAC contracts
+        # Get available WPAC contracts
         contract_options = []
         contract_map = {}
         contract_name = "wpac"
@@ -589,7 +589,7 @@ class HitchcockCLI:
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             if address:
-                display_name = f"wPAC on {config.get_network_display_name(network)}"
+                display_name = f"WPAC on {config.get_network_display_name(network)}"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -703,7 +703,7 @@ class HitchcockCLI:
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
             if address:
-                display_name = f"wPAC on {config.get_network_display_name(network)}"
+                display_name = f"WPAC on {config.get_network_display_name(network)}"
                 contract_options.append(display_name)
                 contract_map[display_name] = (contract_name, network)
 
@@ -914,9 +914,9 @@ class HitchcockCLI:
         contract_address: str,
         contract_info: Dict[str, Any],
     ) -> None:
-        """Print wPAC (ERC-20 token) information."""
+        """Print WPAC (ERC-20 token) information."""
         print()
-        print(f"[wPAC Info] {config.get_network_display_name(network)} ({environment})")
+        print(f"[WPAC Info] {config.get_network_display_name(network)} ({environment})")
         print(f"Address: {contract_address}")
         print()
 
@@ -983,11 +983,11 @@ class HitchcockCLI:
 
         if "total_supply" in contract_info and contract_info["total_supply"] is not None:
             # Use fixed decimals from config
-            print(f"Total Supply: {contract_info['total_supply']:.{config.WPAC_DECIMALS}f} wPAC")
+            print(f"Total Supply: {contract_info['total_supply']:.{config.WPAC_DECIMALS}f} WPAC")
 
         if "collected_fee" in contract_info and contract_info["collected_fee"] is not None:
             # Use fixed decimals from config
-            print(f"Collected Fee: {contract_info['collected_fee']:.{config.WPAC_DECIMALS}f} wPAC")
+            print(f"Collected Fee: {contract_info['collected_fee']:.{config.WPAC_DECIMALS}f} WPAC")
         else:
             print("Collected Fee: N/A")
 
@@ -999,11 +999,12 @@ class HitchcockCLI:
         # Get network selection
         network = self.prompt_choice(
             "Select network",
-            ["Polygon", "Binance Smart Chain", "Base"],
+            ["Ethereum", "Polygon", "Binance Smart Chain", "Base"],
         )
 
         # Map display name to network key
         network_map = {
+            "Ethereum": "ethereum",
             "Polygon": "polygon",
             "Binance Smart Chain": "bsc",
             "Base": "base",

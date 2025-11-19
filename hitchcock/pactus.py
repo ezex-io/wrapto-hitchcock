@@ -67,7 +67,7 @@ def create_and_sign_wrap_tx(
     fee_pac: float,
     is_testnet: bool,
 ) -> Tuple[bytes, str]:
-    """Create and sign a wrap transaction (PAC->wPAC)."""
+    """Create and sign a wrap transaction (PAC->WPAC)."""
     setup_hrp(is_testnet)
 
     # Parse private key

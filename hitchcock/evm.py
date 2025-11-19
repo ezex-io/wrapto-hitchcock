@@ -114,10 +114,10 @@ def _get_native_token_symbol(chain_id: int) -> str:
 
 def get_wpac_total_supply(contract_address: str, rpc_endpoint: str) -> float | None:
     """
-    Get only the total supply of wPAC contract (lightweight function for faster queries).
+    Get only the total supply of WPAC contract (lightweight function for faster queries).
 
     Args:
-        contract_address: Address of the wPAC contract
+        contract_address: Address of the WPAC contract
         rpc_endpoint: RPC endpoint URL
 
     Returns:
@@ -153,7 +153,7 @@ def get_wpac_total_supply(contract_address: str, rpc_endpoint: str) -> float | N
 
 
 def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
-    """Get wPAC contract information."""
+    """Get WPAC contract information."""
     w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
 
     if not w3.is_connected():
@@ -608,7 +608,7 @@ def _create_admin_transaction(
     contract_abi: List[Dict[str, Any]],
     function_builder: Callable[[Any], Any],
 ) -> Dict[str, Any]:
-    """Shared flow for admin transactions that mutate wPAC contract roles."""
+    """Shared flow for admin transactions that mutate WPAC contract roles."""
     w3 = _connect_web3(rpc_endpoint)
     owner_address, private_key_bytes = _get_owner_context(owner_privkey, use_trezor, trezor_path)
     transaction = _build_contract_transaction(

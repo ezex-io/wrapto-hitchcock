@@ -22,6 +22,10 @@ def get_env(key: str, default: str) -> str:
 # Structure: CONTRACTS[contract_name][network][environment]
 CONTRACTS: Dict[str, Dict[str, Dict[str, str]]] = {
     "wpac": {
+        "ethereum": {
+            "testnet": "0xa19cE2a5855bfef29EEE8781E3e6E55BCB039C91",
+            "mainnet": "",
+        },
         "polygon": {
             "testnet": "0x1F9EcDf71DDb39022728B53f5584621762e466be",  # Polygon Amoy
             "mainnet": "0x2f77E0afAEE06970Bf860B8267b5aFECFFF6F216",
@@ -41,6 +45,16 @@ CONTRACTS: Dict[str, Dict[str, Dict[str, str]]] = {
 # RPC endpoints with environment variable support and defaults
 # Structure: RPC_ENDPOINTS[network][environment]
 RPC_ENDPOINTS: Dict[str, Dict[str, str]] = {
+    "ethereum": {
+        "testnet": get_env(
+            "ETHEREUM_TESTNET_RPC",
+            "https://sepolia.drpc.org"
+        ),
+        "mainnet": get_env(
+            "ETHEREUM_MAINNET_RPC",
+            "https://eth.drpc.org"
+        ),
+    },
     "polygon": {
         "testnet": get_env(
             "POLYGON_AMOY_RPC",
@@ -146,7 +160,7 @@ def get_network_display_name(network: str) -> str:
 
 # Pactus Wrapto addresses (deposit and withdraw)
 # Deposit: locked/cold address for wrapping PAC
-# Withdraw: unlocked/warm address for unwrapping wPAC
+# Withdraw: unlocked/warm address for unwrapping WPAC
 WRAPTO_ADDRESSES: Dict[str, Dict[str, str]] = {
     "mainnet": {
         "deposit": "pc1rgzu8c63my0cef7nyh8jntxnrvuvmzhpfpnxd6n",
@@ -173,8 +187,8 @@ def get_wrapto_address(environment: str = "mainnet", address_type: str = "deposi
     return WRAPTO_ADDRESSES.get(environment, {}).get(address_type)
 
 
-# wPAC token configuration
-WPAC_DECIMALS = 9  # Fixed decimal places for wPAC token
+# WPAC token configuration
+WPAC_DECIMALS = 9  # Fixed decimal places for WPAC token
 
 
 def get_trezor_derivation_path() -> str:
