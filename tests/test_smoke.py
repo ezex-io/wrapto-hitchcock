@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def test_imports():
     """Test that all modules can be imported."""
     try:
-        from hitchcock import config, cli, evm, models, pactus, utils
+        from hitchcock import config, cli, evm, models, pactus, utils  # noqa: F401
         print("✓ All modules imported successfully")
         return True
     except ImportError as e:

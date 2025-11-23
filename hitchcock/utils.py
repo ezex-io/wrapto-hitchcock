@@ -132,5 +132,3 @@ def print_menu(
         print(f"{key}. {item_formatter(label)}")
 
     print()
-
-

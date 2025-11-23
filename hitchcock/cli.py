@@ -2,27 +2,26 @@
 
 from __future__ import annotations
 
-import base64
+import readline
 import sys
 from typing import Any, Callable, Dict, List, Tuple
-
+from pactus.types import Amount
 from hitchcock import config, evm, models, pactus, utils
 
 
 class HitchcockCLI:
     """Main CLI class for Hitchcock."""
 
-    def __init__(self, environment: str = "mainnet") -> None:
+    def __init__(self, environment: str = "testnet") -> None:
         self.environment = environment
         self.actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Generate private key", self.generate_private_key),
             "2": ("Get Address from Private key", self.get_address_from_private_key),
             "3": ("Show PAC Info", self.show_pac_info),
             "4": ("Show WPAC Info", self.show_wpac_info),
-            "5": ("Create and Sign Wrap Transaction (PAC->WPAC)", self.create_wrap_transaction),
-            "6": ("Create and Sign Unwrap Transaction (WPAC->PAC)", self.create_unwrap_transaction),
-            "7": ("Dump All Bridges", self.dump_all_bridges),
-            "8": ("Administrator Menu", self.administrator_menu),
+            "5": ("WPAC Contract Tools", self.wpac_contract_tools_menu),
+            "6": ("Send Wrap Transaction (PAC->WPAC)", self.create_wrap_transaction),
+            "7": ("Send Unwrap Transaction (WPAC->PAC)", self.create_unwrap_transaction),
             "0": ("Exit", self.exit_program),
         }
         self.should_exit = False
@@ -31,6 +30,13 @@ class HitchcockCLI:
         """Run the CLI main loop."""
         # utils.clear_screen()
         utils.print_banner()
+
+        # Display current environment
+        environment_display = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_color = utils.bold_red if self.environment == "mainnet" else utils.bold_yellow
+        print()
+        print(f"{utils.bold('Environment:')} {env_color(environment_display)}")
+        print()
 
         while not self.should_exit:
             try:
@@ -78,11 +84,46 @@ class HitchcockCLI:
                 return reverse_map[normalized]
             utils.warn(f"Invalid choice: {choice!r}. Please try again.")
 
+    def prompt_input(self, prompt: str, default: str) -> str:
+        """
+        Prompt user for input with a default value pre-filled.
+
+        Args:
+            prompt: The prompt message (should include default in format like "Enter amount in PAC: ")
+            default: The default value to pre-fill in the input field
+
+        Returns:
+            The user input or default value if empty
+        """
+        # Pre-fill the input with the default value
+        readline.set_startup_hook(lambda: readline.insert_text(default))
+        try:
+            user_input = input(prompt).strip()
+        finally:
+            readline.set_startup_hook()
+        return user_input if user_input else default
+
+    def prompt_confirm(self, prompt: str, default: bool = False) -> bool:
+        """
+        Prompt user for yes/no confirmation.
+
+        Args:
+            prompt: The prompt message (should include (y/N) or (Y/n) format)
+            default: The default value (True for yes, False for no)
+
+        Returns:
+            True if user confirmed (y/yes), False otherwise
+        """
+        user_input = input(prompt).strip().lower()
+        if not user_input:
+            return default
+        return user_input in ["y", "yes"]
+
     def generate_private_key(self) -> None:
         """Generate private key for selected network."""
         network = self.prompt_choice(
             "Select a target network",
-            ["Pactus", "Ethereum", "Polygon", "Binance Smart Chain", "Base"],
+            ["Pactus", "Ethereum", "Polygon", "BSC", "Base"],
         )
 
         if network == "Pactus":
@@ -98,7 +139,7 @@ class HitchcockCLI:
         """Get address from private key."""
         network = self.prompt_choice(
             "Select network",
-            ["Pactus", "Ethereum", "Polygon", "Binance Smart Chain", "Base"],
+            ["Pactus", "Ethereum", "Polygon", "BNB Smart Chain (BSC)", "Base"],
         )
 
         if network == "Pactus":
@@ -127,7 +168,7 @@ class HitchcockCLI:
 
             self.print_address_info(address_info, network, environment)
         except Exception as e:
-            utils.error(f"Failed to derive address: {e}")
+            print(e)
             return
 
         input("\nPress Enter to return to the main menu...")
@@ -145,14 +186,18 @@ class HitchcockCLI:
             return
 
         print()
-        sender_privkey_str = input("Enter Pactus sender private key: ").strip()
+        # Check .env first
+        sender_privkey_str = config.get_pactus_sender_private_key()
+        if not sender_privkey_str:
+            sender_privkey_str = input("Enter Pactus sender private key: ").strip()
+
         if not sender_privkey_str:
             utils.warn("Sender private key is required.")
             return
 
         dest_network = self.prompt_choice(
             "Select destination network",
-            ["Ethereum", "Polygon", "Binance Smart Chain", "Base"],
+            ["Ethereum", "Polygon", "BNB Smart Chain (BSC)", "Base"],
         )
 
         print()
@@ -162,40 +207,61 @@ class HitchcockCLI:
             return
 
         print()
-        amount_str = input("Enter amount in PAC (default: 1.0): ").strip()
-        if not amount_str:
-            amount_pac = 1.0
-        else:
-            try:
-                amount_pac = float(amount_str)
-            except ValueError:
-                utils.warn(f"Invalid amount: {amount_str}. Using default 1.0 PAC.")
-                amount_pac = 1.0
+        amount_str = self.prompt_input("Enter amount in PAC: ", "10.0")
+        try:
+            amount = Amount.from_string(amount_str)
+        except ValueError:
+            utils.warn(f"Invalid amount: {amount_str}. Using default 10.0 PAC.")
+            amount = Amount.from_string("10.0")
 
         print()
-        fee_str = input("Enter fee in PAC (default: 0.001): ").strip()
-        if not fee_str:
-            fee_pac = 0.001
-        else:
-            try:
-                fee_pac = float(fee_str)
-            except ValueError:
-                utils.warn(f"Invalid fee: {fee_str}. Using default 0.001 PAC.")
-                fee_pac = 0.001
+        fee_str = self.prompt_input("Enter fee in PAC: ", "0.01")
+        try:
+            fee = Amount.from_string(fee_str)
+        except ValueError:
+            utils.warn(f"Invalid fee: {fee_str}. Using default 0.01 PAC.")
+            fee = Amount.from_string("0.01")
+
+        print()
+        # Map network display name to memo format
+        network_memo_map = {
+            "Ethereum": "Eth",
+            "Polygon": "Polygon",
+            "BNB Smart Chain": "BSC",
+            "BNB Smart Chain (BSC)": "BSC",
+            "Base": "Base",
+        }
+        network_for_memo = network_memo_map.get(dest_network, dest_network)
+        default_memo = f"{dest_address}@{network_for_memo}"
+        memo = self.prompt_input("Enter memo: ", default_memo)
 
         try:
+
             signed_tx, sender_addr = pactus.create_and_sign_wrap_tx(
                 sender_privkey_str,
                 wrapto_address,
                 dest_address,
                 dest_network,
-                amount_pac,
-                fee_pac,
+                amount,
+                fee,
                 is_testnet,
+                memo,
             )
             self.print_signed_transaction(signed_tx, environment, dest_network, sender_addr)
+
+            # Ask if user wants to broadcast
+            print()
+            if self.prompt_confirm("Broadcast transaction to blockchain? (y/N): "):
+                try:
+                    tx_id = pactus.broadcast_transaction(signed_tx, is_testnet)
+                    print()
+                    utils.success("Transaction broadcast successfully!")
+                    print()
+                    print(f"{utils.bold('Transaction ID:')} {utils.bold_cyan(tx_id)}")
+                except Exception as e:
+                    print(e)
         except Exception as e:
-            utils.error(f"Failed to create transaction: {e}")
+            print(e)
             return
 
         input("\nPress Enter to return to the main menu...")
@@ -227,7 +293,7 @@ class HitchcockCLI:
                 withdraw_balance,
             )
         except Exception as e:
-            utils.error(f"Failed to fetch PAC balances: {e}")
+            print(e)
             return
 
         input("\nPress Enter to return to the main menu...")
@@ -238,9 +304,9 @@ class HitchcockCLI:
         env_key = self.environment
 
         # Calculate total WPAC supply across all networks and fetch individual supplies
-        total_supply = 0.0
+        total_supply = Amount(0)
         contract_name = "wpac"
-        network_supplies = {}  # Store supply for each network
+        network_supplies: Dict[str, Amount] = {}  # Store supply as Amount objects
 
         for network in config.list_networks():
             address = config.get_contract_address(contract_name, network, env_key)
@@ -249,18 +315,17 @@ class HitchcockCLI:
                 try:
                     # Use lightweight function that only fetches total supply
                     supply = evm.get_wpac_total_supply(address, rpc_endpoint)
-                    if supply is not None:
-                        total_supply += supply
-                        network_supplies[network] = supply
-                    else:
-                        network_supplies[network] = None  # Mark as unavailable
-                except Exception:
-                    network_supplies[network] = None  # Mark as unavailable
+                    # Keep Amount objects, add to total
+                    total_supply = Amount(total_supply.value + supply.value)
+                    network_supplies[network] = supply
+                except Exception as e:
+                    # Log error for debugging - network will not be in network_supplies
+                    utils.warn(f"Failed to fetch WPAC supply for {network}: {e}")
 
         # Display total WPAC supply in bold and yellow
-        if total_supply > 0:
+        if total_supply.value > 0:
             print()
-            print(utils.bold_yellow(f"Total Supply: {total_supply:.9f} WPAC"))
+            print(utils.bold_yellow(f"Total Supply: {total_supply} WPAC"))
             print()
 
         # Get available WPAC contracts with supply information
@@ -273,8 +338,7 @@ class HitchcockCLI:
                 # Get supply for this network
                 supply = network_supplies.get(network)
                 if supply is not None:
-                    # Use fixed decimals from config
-                    display_name = f"WPAC on {config.get_network_display_name(network)} ({supply:.{config.WPAC_DECIMALS}f} WPAC)"
+                    display_name = f"WPAC on {config.get_network_display_name(network)} ({supply} WPAC)"
                 else:
                     display_name = f"WPAC on {config.get_network_display_name(network)} (N/A)"
                 contract_options.append(display_name)
@@ -300,7 +364,7 @@ class HitchcockCLI:
             contract_info = evm.get_wpac_info(contract_address, rpc_endpoint)
             self.print_wpac_info(network, environment, contract_address, contract_info)
         except Exception as e:
-            utils.error(f"Failed to fetch WPAC info: {e}")
+            print(e)
             return
 
         input("\nPress Enter to return to the main menu...")
@@ -365,7 +429,7 @@ class HitchcockCLI:
 
         if not contract_options:
             utils.warn("No contracts found for the selected environment.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         selected_display = self.prompt_choice("Select contract", contract_options)
@@ -376,7 +440,7 @@ class HitchcockCLI:
 
         if not contract_address or not rpc_endpoint:
             utils.warn("Contract address or RPC endpoint not found.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         # Fetch current minter address
@@ -389,13 +453,13 @@ class HitchcockCLI:
             else:
                 utils.warn("Could not fetch current minter address.")
         except Exception as e:
-            utils.warn(f"Could not fetch current minter address: {e}")
+            print(e)
 
         print()
         new_minter = input("Enter new minter address: ").strip()
         if not new_minter:
             utils.warn("Minter address is required.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         # Offer Trezor signing option for both Mainnet and Testnet
@@ -418,10 +482,13 @@ class HitchcockCLI:
             utils.info("Please connect and unlock your Trezor device...")
         else:
             print()
-            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            # Check .env first
+            owner_privkey = config.get_owner_private_key()
+            if not owner_privkey:
+                owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
             if not owner_privkey:
                 utils.warn("Owner private key is required.")
-                input("\nPress Enter to return to the administrator menu...")
+                input("\nPress Enter to return to administrator menu...")
                 return
 
         try:
@@ -437,8 +504,7 @@ class HitchcockCLI:
 
             # Ask if user wants to send the transaction
             print()
-            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
-            if send_choice in ["y", "yes"]:
+            if self.prompt_confirm("Send transaction to blockchain? (y/N): "):
                 try:
                     result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
                     print()
@@ -452,14 +518,14 @@ class HitchcockCLI:
                         print(f"{utils.bold('Status:')} {status_color(status_text)}")
                         print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
                 except Exception as e:
-                    utils.error(f"Failed to send transaction: {e}")
+                    print(e)
             else:
                 utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
         except Exception as e:
-            utils.error(f"Failed to create transaction: {e}")
+            print(e)
             return
 
-        input("\nPress Enter to return to the administrator menu...")
+        input("\nPress Enter to return to administrator menu...")
 
     def set_fee_collector_address(self) -> None:
         """Set the fee collector address for a WPAC contract."""
@@ -480,7 +546,7 @@ class HitchcockCLI:
 
         if not contract_options:
             utils.warn("No contracts found for the selected environment.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         selected_display = self.prompt_choice("Select contract", contract_options)
@@ -491,7 +557,7 @@ class HitchcockCLI:
 
         if not contract_address or not rpc_endpoint:
             utils.warn("Contract address or RPC endpoint not found.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         # Fetch current fee collector address
@@ -504,13 +570,13 @@ class HitchcockCLI:
             else:
                 utils.warn("Could not fetch current fee collector address.")
         except Exception as e:
-            utils.warn(f"Could not fetch current fee collector address: {e}")
+            print(e)
 
         print()
         new_fee_collector = input("Enter new fee collector address: ").strip()
         if not new_fee_collector:
             utils.warn("Fee collector address is required.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         # Offer Trezor signing option for both Mainnet and Testnet
@@ -533,10 +599,13 @@ class HitchcockCLI:
             utils.info("Please connect and unlock your Trezor device...")
         else:
             print()
-            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            # Check .env first
+            owner_privkey = config.get_owner_private_key()
+            if not owner_privkey:
+                owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
             if not owner_privkey:
                 utils.warn("Owner private key is required.")
-                input("\nPress Enter to return to the administrator menu...")
+                input("\nPress Enter to return to administrator menu...")
                 return
 
         try:
@@ -552,8 +621,7 @@ class HitchcockCLI:
 
             # Ask if user wants to send the transaction
             print()
-            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
-            if send_choice in ["y", "yes"]:
+            if self.prompt_confirm("Send transaction to blockchain? (y/N): "):
                 try:
                     result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
                     print()
@@ -567,14 +635,14 @@ class HitchcockCLI:
                         print(f"{utils.bold('Status:')} {status_color(status_text)}")
                         print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
                 except Exception as e:
-                    utils.error(f"Failed to send transaction: {e}")
+                    print(e)
             else:
                 utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
         except Exception as e:
-            utils.error(f"Failed to create transaction: {e}")
+            print(e)
             return
 
-        input("\nPress Enter to return to the administrator menu...")
+        input("\nPress Enter to return to administrator menu...")
 
     def transfer_ownership(self) -> None:
         """Transfer ownership of a WPAC contract."""
@@ -595,7 +663,7 @@ class HitchcockCLI:
 
         if not contract_options:
             utils.warn("No contracts found for the selected environment.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         selected_display = self.prompt_choice("Select contract", contract_options)
@@ -606,7 +674,7 @@ class HitchcockCLI:
 
         if not contract_address or not rpc_endpoint:
             utils.warn("Contract address or RPC endpoint not found.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         # Fetch current owner address
@@ -619,13 +687,13 @@ class HitchcockCLI:
             else:
                 utils.warn("Could not fetch current owner address.")
         except Exception as e:
-            utils.warn(f"Could not fetch current owner address: {e}")
+            print(e)
 
         print()
         new_owner = input("Enter new owner address: ").strip()
         if not new_owner:
             utils.warn("Owner address is required.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         # Offer Trezor signing option for both Mainnet and Testnet
@@ -648,10 +716,13 @@ class HitchcockCLI:
             utils.info("Please connect and unlock your Trezor device...")
         else:
             print()
-            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            # Check .env first
+            owner_privkey = config.get_owner_private_key()
+            if not owner_privkey:
+                owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
             if not owner_privkey:
                 utils.warn("Owner private key is required.")
-                input("\nPress Enter to return to the administrator menu...")
+                input("\nPress Enter to return to administrator menu...")
                 return
 
         try:
@@ -667,8 +738,7 @@ class HitchcockCLI:
 
             # Ask if user wants to send the transaction
             print()
-            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
-            if send_choice in ["y", "yes"]:
+            if self.prompt_confirm("Send transaction to blockchain? (y/N): "):
                 try:
                     result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
                     print()
@@ -682,14 +752,14 @@ class HitchcockCLI:
                         print(f"{utils.bold('Status:')} {status_color(status_text)}")
                         print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
                 except Exception as e:
-                    utils.error(f"Failed to send transaction: {e}")
+                    print(e)
             else:
                 utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
         except Exception as e:
-            utils.error(f"Failed to create transaction: {e}")
+            print(e)
             return
 
-        input("\nPress Enter to return to the administrator menu...")
+        input("\nPress Enter to return to administrator menu...")
 
     def upgrade_proxy_implementation(self) -> None:
         """Upgrade the proxy implementation (set new logic contract)."""
@@ -709,7 +779,7 @@ class HitchcockCLI:
 
         if not contract_options:
             utils.warn("No contracts found for the selected environment.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         selected_display = self.prompt_choice("Select contract", contract_options)
@@ -720,7 +790,7 @@ class HitchcockCLI:
 
         if not contract_address or not rpc_endpoint:
             utils.warn("Contract address or RPC endpoint not found.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         try:
@@ -738,7 +808,7 @@ class HitchcockCLI:
         new_impl = input("Enter new implementation address: ").strip()
         if not new_impl:
             utils.warn("Implementation address is required.")
-            input("\nPress Enter to return to the administrator menu...")
+            input("\nPress Enter to return to administrator menu...")
             return
 
         use_trezor = False
@@ -760,10 +830,13 @@ class HitchcockCLI:
             utils.info("Please connect and unlock your Trezor device...")
         else:
             print()
-            owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
+            # Check .env first
+            owner_privkey = config.get_owner_private_key()
+            if not owner_privkey:
+                owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
             if not owner_privkey:
                 utils.warn("Owner private key is required.")
-                input("\nPress Enter to return to the administrator menu...")
+                input("\nPress Enter to return to administrator menu...")
                 return
 
         try:
@@ -784,8 +857,7 @@ class HitchcockCLI:
             )
 
             print()
-            send_choice = input("Send transaction to blockchain? (y/N): ").strip().lower()
-            if send_choice in ["y", "yes"]:
+            if self.prompt_confirm("Send transaction to blockchain? (y/N): "):
                 try:
                     result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
                     print()
@@ -799,14 +871,14 @@ class HitchcockCLI:
                         print(f"{utils.bold('Status:')} {status_color(status_text)}")
                         print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
                 except Exception as e:
-                    utils.error(f"Failed to send transaction: {e}")
+                    print(e)
             else:
                 utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
         except Exception as e:
-            utils.error(f"Failed to create transaction: {e}")
+            print(e)
             return
 
-        input("\nPress Enter to return to the administrator menu...")
+        input("\nPress Enter to return to administrator menu...")
 
     def print_signed_admin_transaction(
         self, signed_tx: Dict[str, Any], network: str, environment: str, action: str, new_address: str
@@ -868,44 +940,37 @@ class HitchcockCLI:
         print(f"Sender address: {sender_addr}")
         print(f"Destination: {dest_network}")
         print(f"Signed transaction (hex): {signed_tx.hex()}")
-        print(f"Signed transaction (base64): {base64.b64encode(signed_tx).decode('ascii')}")
 
     def print_wrapto_balances(
         self,
         environment: str,
         deposit_address: str,
-        deposit_balance: Any,
+        deposit_balance: Amount,
         withdraw_address: str,
-        withdraw_balance: Any,
+        withdraw_balance: Amount,
     ) -> None:
         """Print Wrapto deposit and withdraw address balances."""
-        from pactus.amount import Amount
-
         print()
         print(f"[PAC Balance] Wrapto Project ({environment})")
         print()
 
-        # Calculate total PAC
+        # Calculate total PAC using Amount objects
         total_balance = Amount(deposit_balance.value + withdraw_balance.value)
-        total_pac = total_balance.value / 1e9
 
         # Display total PAC in bold and yellow
-        print(utils.bold_yellow(f"Total PAC: {total_pac:.9f} PAC"))
+        print(utils.bold_yellow(f"Total PAC: {total_balance} PAC"))
         print()
 
-        # Convert Amount to PAC for display
-        deposit_pac = deposit_balance.value / 1e9
-        withdraw_pac = withdraw_balance.value / 1e9
 
-        print(f"Deposit Address (Locked/Cold):")
+        print("Deposit Address (Locked/Cold):")
         print(f"  Address: {deposit_address}")
-        print(f"  Balance: {deposit_pac:.9f} PAC")
+        print(f"  Balance: {deposit_balance} PAC")
 
         print()
 
-        print(f"Withdraw Address (Unlocked/Warm):")
+        print("Withdraw Address (Unlocked/Warm):")
         print(f"  Address: {withdraw_address}")
-        print(f"  Balance: {withdraw_pac:.9f} PAC")
+        print(f"  Balance: {withdraw_balance} PAC")
 
     def print_wpac_info(
         self,
@@ -951,7 +1016,7 @@ class HitchcockCLI:
             if "owner_balance" in contract_info and contract_info["owner_balance"] is not None:
                 symbol = contract_info.get("owner_balance_symbol", "ETH")
                 balance = contract_info["owner_balance"]
-                print(f"Owner: {owner_addr} ({balance:.6f} {symbol})")
+                print(f"Owner: {owner_addr} ({balance:} {symbol})")
             else:
                 print(f"Owner: {owner_addr} (Balance: N/A)")
         else:
@@ -991,22 +1056,113 @@ class HitchcockCLI:
         else:
             print("Collected Fee: N/A")
 
+    def wpac_contract_tools_menu(self) -> None:
+        """WPAC Contract Tools menu - combines query, dump, and admin functions."""
+        tools_actions: Dict[str, Tuple[str, Callable[[], None]]] = {
+            "1": ("Query WPAC Balance", self.query_wpac_balance),
+            "2": ("Dump All Bridges", self.dump_all_bridges),
+            "3": ("Administrator Menu", self.administrator_menu),
+        }
+
+        # Convert tools_actions to simple dict for menu display
+        menu_items = {key: label for key, (label, _) in tools_actions.items()}
+        # Add "0" option for going back to main menu
+        menu_items["0"] = "Back to Main Menu"
+
+        choice = ""
+        while choice != "0":
+            utils.print_menu("WPAC Contract Tools", menu_items)
+            choice = input("Choose an option: ").strip()
+
+            if choice == "0":
+                break
+
+            action = tools_actions.get(choice)
+            if action:
+                label, callback = action
+                utils.section_header(label)
+                try:
+                    callback()
+                except KeyboardInterrupt:
+                    utils.section_footer("Cancelled. Returning to WPAC Contract Tools menu.")
+                except EOFError:
+                    utils.section_footer("Received EOF. Returning to main menu.")
+                    break
+            else:
+                utils.warn(f"Unknown choice: {choice!r}")
+
+    def query_wpac_balance(self) -> None:
+        """Query WPAC ERC-20 token balance for an address."""
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
+
+        # Get available WPAC contracts
+        contract_options = []
+        contract_map = {}
+        contract_name = "wpac"
+
+        for network in config.list_networks():
+            address = config.get_contract_address(contract_name, network, env_key)
+            if address:
+                display_name = f"WPAC on {config.get_network_display_name(network)}"
+                contract_options.append(display_name)
+                contract_map[display_name] = (contract_name, network)
+
+        if not contract_options:
+            utils.warn("No contracts found for the selected environment.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        selected_display = self.prompt_choice("Select contract", contract_options)
+        contract_name, network = contract_map[selected_display]
+
+        contract_address = config.get_contract_address(contract_name, network, env_key)
+        rpc_endpoint = config.get_rpc_endpoint(network, env_key)
+
+        if not contract_address or not rpc_endpoint:
+            utils.warn("Contract address or RPC endpoint not found.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        print()
+        address_to_query = input("Enter address to query balance for: ").strip()
+        if not address_to_query:
+            utils.warn("Address is required.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        try:
+            balance: Amount = evm.get_wpac_balance(contract_address, address_to_query, rpc_endpoint)
+            print()
+            print(utils.bold_cyan(f"[WPAC Balance] {config.get_network_display_name(network)} ({environment})"))
+            print()
+            print(f"{utils.bold('Contract Address:')} {contract_address}")
+            print(f"{utils.bold('Query Address:')} {address_to_query}")
+            print(f"{utils.bold('Balance:')} {utils.bold_yellow(f'{balance} WPAC')}")
+        except Exception as e:
+            utils.error(f"Failed to query balance: {e}")
+            print(e)
+
+        input("\nPress Enter to return to WPAC Contract Tools menu...")
+
     def dump_all_bridges(self) -> None:
-        """Dump all bridges from the bridge contract."""
+        """Dump all bridges from the bridge contract and write to file."""
+        from datetime import datetime
+
         environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
         env_key = self.environment
 
         # Get network selection
         network = self.prompt_choice(
             "Select network",
-            ["Ethereum", "Polygon", "Binance Smart Chain", "Base"],
+            ["Ethereum", "Polygon", "BNB Smart Chain", "Base"],
         )
 
         # Map display name to network key
         network_map = {
             "Ethereum": "ethereum",
             "Polygon": "polygon",
-            "Binance Smart Chain": "bsc",
+            "BNB Smart Chain": "bnb",
             "Base": "base",
         }
         network_key = network_map[network]
@@ -1015,14 +1171,14 @@ class HitchcockCLI:
         rpc_endpoint = config.get_rpc_endpoint(network_key, env_key)
         if not rpc_endpoint:
             utils.warn("RPC endpoint not found for the selected network.")
-            input("\nPress Enter to return to the main menu...")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
             return
 
         # Get contract address from config (same as wpac contract)
         contract_address = config.get_contract_address("wpac", network_key, env_key)
         if not contract_address:
             utils.warn("Contract address not found for the selected network.")
-            input("\nPress Enter to return to the main menu...")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
             return
 
         try:
@@ -1031,38 +1187,57 @@ class HitchcockCLI:
 
             if not bridges:
                 utils.warn("No bridges found.")
-                input("\nPress Enter to return to the main menu...")
+                input("\nPress Enter to return to WPAC Contract Tools menu...")
                 return
 
             # Log total bridges count
             total_bridges = len(bridges)
             utils.info(f"Total Bridges: {total_bridges}")
 
-            # Display bridges
+            # Generate filename: bridges_{network}_{environment}.txt
+            filename = f"bridges_{network_key}_{env_key}.txt"
+
+            # Write bridges to file
+            with open(filename, "w", encoding="utf-8") as f:
+                # Write header information
+                f.write("=" * 80 + "\n")
+                f.write(f"Bridge Dump - {config.get_network_display_name(network_key)} ({environment})\n")
+                f.write("=" * 80 + "\n")
+                f.write(f"Smart Contract Address: {contract_address}\n")
+                f.write(f"Network: {config.get_network_display_name(network_key)}\n")
+                f.write(f"Environment: {environment}\n")
+                f.write(f"Total Bridges: {total_bridges}\n")
+                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 80 + "\n")
+                f.write("\n")
+
+                # Write bridge data
+                for bridge in bridges:
+                    if "error" in bridge:
+                        f.write(f"Bridge #{bridge['index']}: ERROR\n")
+                        f.write(f"  Error: {bridge['error']}\n")
+                    else:
+                        f.write(f"Bridge #{bridge['index']}:\n")
+                        f.write(f"  Sender: {bridge['sender']}\n")
+                        f.write(f"  Amount: {bridge['amount']}\n")
+                        f.write(f"  Destination Address: {bridge['destinationAddress']}\n")
+                        f.write(f"  Fee: {bridge['fee']}\n")
+                    f.write("\n")
+
+            # Display summary
             print()
             print(utils.bold_cyan(f"[Bridge Dump] {config.get_network_display_name(network_key)} ({environment})"))
             print()
             print(utils.bold_yellow(f"Total Bridges: {total_bridges}"))
             print()
-
-            for bridge in bridges:
-                if "error" in bridge:
-                    bridge_label = utils.bold_red(f"Bridge #{bridge['index']}:")
-                    print(f"{bridge_label} Error - {bridge['error']}")
-                else:
-                    bridge_label = utils.bold(f"Bridge #{bridge['index']}:")
-                    print(bridge_label)
-                    print(f"  {utils.bold('Sender:')} {bridge['sender']}")
-                    print(f"  {utils.bold('Amount:')} {bridge['amount']}")
-                    print(f"  {utils.bold('Destination Address:')} {bridge['destinationAddress']}")
-                    print(f"  {utils.bold('Fee:')} {bridge['fee']}")
-                print()
+            print(utils.success(f"Bridges written to file: {utils.bold(filename)}"))
+            print(f"Contract Address: {contract_address}")
 
         except Exception as e:
-            utils.error(f"Failed to dump bridges: {e}")
+            print(e)
             return
 
-        input("\nPress Enter to return to the main menu...")
+        input("\nPress Enter to return to WPAC Contract Tools menu...")
 
     def exit_program(self) -> None:
         """Exit the program."""
@@ -1070,7 +1245,7 @@ class HitchcockCLI:
         self.should_exit = True
 
 
-def main(environment: str = "mainnet") -> int:
+def main(environment: str = "testnet") -> int:
     """Main entry point."""
     cli = HitchcockCLI(environment)
     cli.run()

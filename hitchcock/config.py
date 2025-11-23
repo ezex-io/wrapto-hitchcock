@@ -30,8 +30,8 @@ CONTRACTS: Dict[str, Dict[str, Dict[str, str]]] = {
             "testnet": "0x1F9EcDf71DDb39022728B53f5584621762e466be",  # Polygon Amoy
             "mainnet": "0x2f77E0afAEE06970Bf860B8267b5aFECFFF6F216",
         },
-        "bsc": {
-            "testnet": "0xA9A2511Bb9cE4aCF4F02D679Af836a0fcC8c8AF7",  # BSC Testnet
+        "bnb": {
+            "testnet": "0xA9A2511Bb9cE4aCF4F02D679Af836a0fcC8c8AF7",  # BNB Chain Testnet
             "mainnet": "0x10004a9A742ec135c686C9aCed00FA3C93D66866",
         },
         "base": {
@@ -65,7 +65,7 @@ RPC_ENDPOINTS: Dict[str, Dict[str, str]] = {
             "https://polygon.drpc.org"
         ),
     },
-    "bsc": {
+    "bnb": {
         "testnet": get_env(
             "BSC_TESTNET_RPC",
             "https://bsc-testnet.drpc.org"
@@ -98,7 +98,7 @@ def get_contract_address(
 
     Args:
         contract_name: Name of the contract (e.g., "hitchcock")
-        network: Network name (e.g., "polygon", "bsc", "base")
+        network: Network name (e.g., "polygon", "bnb", "base")
         environment: Environment type ("testnet" or "mainnet")
 
     Returns:
@@ -115,7 +115,7 @@ def get_rpc_endpoint(
     Get RPC endpoint for a given network and environment.
 
     Args:
-        network: Network name (e.g., "polygon", "bsc", "base")
+        network: Network name (e.g., "polygon", "bnb", "base")
         environment: Environment type ("testnet" or "mainnet")
 
     Returns:
@@ -144,13 +144,13 @@ def get_network_display_name(network: str) -> str:
     Get the proper display name for a network.
 
     Args:
-        network: Network key (e.g., "bsc", "polygon", "base")
+        network: Network key (e.g., "bnb", "polygon", "base")
 
     Returns:
         Properly formatted display name (e.g., "BSC", "Polygon", "Base")
     """
     network_display_map = {
-        "bsc": "BSC",
+        "bnb": "BNB Smart Chain (BSC)",
         "polygon": "Polygon",
         "base": "Base",
         "ethereum": "Ethereum",
@@ -194,4 +194,45 @@ WPAC_DECIMALS = 9  # Fixed decimal places for WPAC token
 def get_trezor_derivation_path() -> str:
     """Get default Trezor derivation path from environment."""
     return get_env("TREZOR_DERIVATION_PATH", "m/44'/60'/0'/0/0")
+
+
+def get_pactus_sender_private_key() -> Optional[str]:
+    """Get Pactus private key from environment variable (for wrap transactions)."""
+    key = os.getenv("PACTUS_PRIVATE_KEY")
+    return key.strip() if key else None
+
+
+def get_evm_private_key(network: Optional[str] = None) -> Optional[str]:
+    """
+    Get EVM private key from environment variable.
+
+    Args:
+        network: Optional network name (e.g., "ethereum", "polygon") for network-specific key
+
+    Returns:
+        Private key string if found, None otherwise
+    """
+    # Try network-specific key first if network is provided
+    if network:
+        network_key_map = {
+            "ethereum": "ETHEREUM",
+            "polygon": "POLYGON",
+            "bnb": "BSC_CHAIN",
+            "base": "BASE",
+        }
+        network_key = network_key_map.get(network.lower())
+        if network_key:
+            key = os.getenv(f"{network_key}_PRIVATE_KEY")
+            if key:
+                return key.strip()
+
+    # Fallback to general EVM private key
+    key = os.getenv("EVM_PRIVATE_KEY")
+    return key.strip() if key else None
+
+
+def get_owner_private_key() -> Optional[str]:
+    """Get owner private key from environment variable (for admin functions)."""
+    key = os.getenv("OWNER_PRIVATE_KEY")
+    return key.strip() if key else None
 

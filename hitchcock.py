@@ -15,16 +15,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mainnet",
         action="store_true",
-        help="Use mainnet environment (default)"
+        help="Use mainnet environment"
     )
 
     args = parser.parse_args()
 
-    # Determine environment: default to mainnet if neither flag is set
+    # Determine environment: default to testnet if neither flag is set
     if args.testnet and args.mainnet:
         print("Error: Cannot specify both --testnet and --mainnet")
         sys.exit(1)
 
-    environment = "testnet" if args.testnet else "mainnet"
+    environment = "mainnet" if args.mainnet else "testnet"
 
     sys.exit(main(environment))

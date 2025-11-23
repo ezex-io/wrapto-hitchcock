@@ -8,6 +8,7 @@ from web3 import Web3
 
 from hitchcock import config, utils
 from hitchcock.models import Credentials
+from pactus.types import Amount
 from trezorlib import ethereum, tools
 from trezorlib.transport import get_transport
 from trezorlib.client import TrezorClient
@@ -16,6 +17,156 @@ from trezorlib.ui import ClickUI
 EIP1967_IMPLEMENTATION_SLOT = int(
     "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", 16
 )
+
+
+class EVMClient:
+    """EVM blockchain client that manages RPC connections."""
+
+    def __init__(self, network: str, environment: str = "testnet"):
+        """
+        Initialize EVM client with network and environment.
+
+        Args:
+            network: Network name (e.g., "ethereum", "polygon", "bnb", "base")
+            environment: "testnet" or "mainnet"
+        """
+        self.network = network.lower()
+        self.environment = environment.lower()
+
+        # Get RPC endpoint from config
+        rpc_endpoint = config.get_rpc_endpoint(self.network, self.environment)
+        if not rpc_endpoint:
+            raise ValueError(f"RPC endpoint not found for {self.network} {self.environment}")
+
+        self.rpc_endpoint = rpc_endpoint
+        self.w3 = self._connect_web3()
+
+    def _connect_web3(self) -> Web3:
+        """Return a connected Web3 instance or raise if unreachable."""
+        w3 = Web3(Web3.HTTPProvider(self.rpc_endpoint))
+
+        if not w3.is_connected():
+            raise ConnectionError(f"Failed to connect to RPC endpoint: {self.rpc_endpoint}")
+
+        return w3
+
+    def generate_credentials(self) -> Credentials:
+        """Generate EVM credentials (secp256k1)."""
+        account = Account.create()
+        key_hex = account.key.hex()
+        public_key_hex = account._key_obj.public_key.to_hex()
+
+        return Credentials(
+            network=self.network,
+            variant="secp256k1",
+            private_key=key_hex,
+            public_key=public_key_hex,
+            address=account.address,
+        )
+
+    def derive_address_from_private_key(self, privkey_str: str) -> Dict[str, str]:
+        """Derive address from EVM private key."""
+        # Remove 0x prefix if present
+        if privkey_str.startswith("0x"):
+            privkey_str = privkey_str[2:]
+
+        private_key_bytes = bytes.fromhex(privkey_str)
+
+        if len(private_key_bytes) != 32:
+            raise ValueError("Private key must be 32 bytes (64 hex characters).")
+
+        private_key_obj = keys.PrivateKey(private_key_bytes)
+        public_key_obj = private_key_obj.public_key
+        account = Account.from_key(private_key_bytes)
+
+        return {
+            "private_key": privkey_str,
+            "public_key": public_key_obj.to_hex(),
+            "address": account.address,
+        }
+
+    def get_wpac_total_supply(self, contract_address: str) -> Amount:
+        """
+        Get only the total supply of WPAC contract (lightweight function for faster queries).
+
+        Args:
+            contract_address: Address of the WPAC contract
+
+        Returns:
+            Total supply as Amount
+
+        Raises:
+            ConnectionError: If unable to connect to RPC endpoint
+            Exception: If contract call fails
+        """
+        # Minimal ABI - only totalSupply function
+        wpac_abi = [
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "totalSupply",
+                "outputs": [{"name": "", "type": "uint256"}],
+                "type": "function",
+            },
+        ]
+
+        contract = self.w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=wpac_abi,
+        )
+
+        total_supply_raw = contract.functions.totalSupply().call()
+        # Convert raw value (in nano units) to Amount
+        return Amount.from_nano_pac(int(total_supply_raw))
+
+    def get_wpac_balance(self, contract_address: str, address: str) -> Amount:
+        """
+        Get WPAC ERC-20 token balance for a specific address.
+
+        Args:
+            contract_address: Address of the WPAC contract
+            address: Address to query balance for
+
+        Returns:
+            Balance as Amount
+
+        Raises:
+            ConnectionError: If unable to connect to RPC endpoint
+            Exception: If contract call fails
+        """
+        # Minimal ABI - only balanceOf function
+        wpac_abi = [
+            {
+                "constant": True,
+                "inputs": [{"name": "_owner", "type": "address"}],
+                "name": "balanceOf",
+                "outputs": [{"name": "balance", "type": "uint256"}],
+                "type": "function",
+            },
+        ]
+
+        contract = self.w3.eth.contract(
+            address=Web3.to_checksum_address(contract_address),
+            abi=wpac_abi,
+        )
+
+        balance_raw = contract.functions.balanceOf(Web3.to_checksum_address(address)).call()
+        # Convert raw value (in nano units) to Amount
+        return Amount.from_nano_pac(int(balance_raw))
+
+    def get_wpac_info(self, contract_address: str) -> Dict[str, Any]:
+        """Get WPAC contract information."""
+        # This is a complex function, we'll keep it as a method but use self.w3
+        # For now, let's create a wrapper that calls the existing function
+        return get_wpac_info(contract_address, self.rpc_endpoint)
+
+    def send_transaction(self, raw_transaction_hex: str) -> Dict[str, Any]:
+        """Send a signed transaction to the blockchain."""
+        return send_transaction(raw_transaction_hex, self.rpc_endpoint)
+
+    def dump_all_bridges(self, contract_address: str) -> List[Dict[str, Any]]:
+        """Dump all bridges from index 0 to counter-1."""
+        return dump_all_bridges(contract_address, self.rpc_endpoint)
 
 
 class TrezorPINUI(ClickUI):
@@ -56,54 +207,29 @@ class TrezorPINUI(ClickUI):
         return passphrase if passphrase else None
 
 
+# Backward compatibility functions that use EVMClient
 def generate_credentials(network: str) -> Credentials:
     """Generate EVM credentials (secp256k1)."""
-    account = Account.create()
-    key_hex = account.key.hex()
-    public_key_hex = account._key_obj.public_key.to_hex()
-
-    return Credentials(
-        network=network,
-        variant="secp256k1",
-        private_key=key_hex,
-        public_key=public_key_hex,
-        address=account.address,
-    )
+    # Network doesn't affect credential generation, but we need it for the Credentials object
+    # Use testnet as default environment since it doesn't matter for key generation
+    client = EVMClient(network, "testnet")
+    return client.generate_credentials()
 
 
 def derive_address_from_private_key(privkey_str: str) -> Dict[str, str]:
     """Derive address from EVM private key."""
-    # Remove 0x prefix if present
-    if privkey_str.startswith("0x"):
-        privkey_str = privkey_str[2:]
-
-    try:
-        private_key_bytes = bytes.fromhex(privkey_str)
-    except ValueError:
-        raise ValueError("Invalid hex format for private key.")
-
-    if len(private_key_bytes) != 32:
-        raise ValueError("Private key must be 32 bytes (64 hex characters).")
-
-    private_key_obj = keys.PrivateKey(private_key_bytes)
-    public_key_obj = private_key_obj.public_key
-    account = Account.from_key(private_key_bytes)
-
-    return {
-        "private_key": privkey_str,
-        "public_key": public_key_obj.to_hex(),
-        "address": account.address,
-    }
+    # Network doesn't affect address derivation, use ethereum as default
+    client = EVMClient("ethereum", "testnet")
+    return client.derive_address_from_private_key(privkey_str)
 
 
 def _get_native_token_symbol(chain_id: int) -> str:
     """Get native token symbol based on chain ID."""
     chain_symbol_map = {
         1: "ETH",      # Ethereum Mainnet
-        5: "ETH",      # Goerli
         11155111: "ETH",  # Sepolia
-        56: "BNB",     # BSC Mainnet
-        97: "BNB",     # BSC Testnet
+        56: "BNB",     # BNB Smart Chain (BSC) Mainnet
+        97: "BNB",     # BNB Smart Chain (BSC) Testnet
         137: "MATIC",  # Polygon Mainnet
         80002: "MATIC",  # Polygon Amoy
         8453: "ETH",   # Base Mainnet
@@ -112,7 +238,7 @@ def _get_native_token_symbol(chain_id: int) -> str:
     return chain_symbol_map.get(chain_id, "ETH")
 
 
-def get_wpac_total_supply(contract_address: str, rpc_endpoint: str) -> float | None:
+def get_wpac_total_supply(contract_address: str, rpc_endpoint: str) -> Amount:
     """
     Get only the total supply of WPAC contract (lightweight function for faster queries).
 
@@ -121,35 +247,78 @@ def get_wpac_total_supply(contract_address: str, rpc_endpoint: str) -> float | N
         rpc_endpoint: RPC endpoint URL
 
     Returns:
-        Total supply as float (already divided by decimals), or None if failed
+        Total supply as Amount
+
+    Raises:
+        ConnectionError: If unable to connect to RPC endpoint
+        Exception: If contract call fails
     """
     w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
 
     if not w3.is_connected():
         raise ConnectionError("Failed to connect to RPC endpoint")
 
-    try:
-        # Minimal ABI - only totalSupply function
-        wpac_abi = [
-            {
-                "constant": True,
-                "inputs": [],
-                "name": "totalSupply",
-                "outputs": [{"name": "", "type": "uint256"}],
-                "type": "function",
-            },
-        ]
+    # Minimal ABI - only totalSupply function
+    wpac_abi = [
+        {
+            "constant": True,
+            "inputs": [],
+            "name": "totalSupply",
+            "outputs": [{"name": "", "type": "uint256"}],
+            "type": "function",
+        },
+    ]
 
-        contract = w3.eth.contract(
-            address=Web3.to_checksum_address(contract_address),
-            abi=wpac_abi,
-        )
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(contract_address),
+        abi=wpac_abi,
+    )
 
-        total_supply = contract.functions.totalSupply().call()
-        # Use fixed decimals from config
-        return total_supply / (10 ** config.WPAC_DECIMALS)
-    except Exception:
-        return None
+    total_supply_raw = contract.functions.totalSupply().call()
+    # Convert raw value (in nano units) to Amount
+    return Amount.from_nano_pac(int(total_supply_raw))
+
+
+def get_wpac_balance(contract_address: str, address: str, rpc_endpoint: str) -> Amount:
+    """
+    Get WPAC ERC-20 token balance for a specific address.
+
+    Args:
+        contract_address: Address of the WPAC contract
+        address: Address to query balance for
+        rpc_endpoint: RPC endpoint URL
+
+    Returns:
+        Balance as Amount
+
+    Raises:
+        ConnectionError: If unable to connect to RPC endpoint
+        Exception: If contract call fails
+    """
+    w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+
+    if not w3.is_connected():
+        raise ConnectionError("Failed to connect to RPC endpoint")
+
+    # Minimal ABI - only balanceOf function
+    wpac_abi = [
+        {
+            "constant": True,
+            "inputs": [{"name": "_owner", "type": "address"}],
+            "name": "balanceOf",
+            "outputs": [{"name": "balance", "type": "uint256"}],
+            "type": "function",
+        },
+    ]
+
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(contract_address),
+        abi=wpac_abi,
+    )
+
+    balance_raw = contract.functions.balanceOf(Web3.to_checksum_address(address)).call()
+    # Convert raw value (in nano units) to Amount
+    return Amount.from_nano_pac(int(balance_raw))
 
 
 def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
@@ -518,10 +687,7 @@ def _get_owner_context(
 
     clean_privkey = owner_privkey[2:] if owner_privkey.startswith("0x") else owner_privkey
 
-    try:
-        private_key_bytes = bytes.fromhex(clean_privkey)
-    except ValueError:
-        raise ValueError("Invalid hex format for private key.")
+    private_key_bytes = bytes.fromhex(clean_privkey)
 
     if len(private_key_bytes) != 32:
         raise ValueError("Private key must be 32 bytes (64 hex characters).")
@@ -666,18 +832,15 @@ def send_transaction(raw_transaction_hex: str, rpc_endpoint: str) -> Dict[str, A
             raw_transaction_hex = raw_transaction_hex[2:]
 
         # Validate transaction format
-        try:
-            raw_tx_bytes = bytes.fromhex(raw_transaction_hex)
-            if len(raw_tx_bytes) == 0:
-                raise ValueError("Empty transaction data")
-        except ValueError as e:
-            raise ValueError(f"Invalid transaction hex format: {e}")
+        raw_tx_bytes = bytes.fromhex(raw_transaction_hex)
+        if len(raw_tx_bytes) == 0:
+            raise ValueError("Empty transaction data")
 
         # Try to decode and validate the transaction before sending (if supported)
         try:
             if hasattr(w3.eth, 'decode_transaction'):
                 decoded_tx = w3.eth.decode_transaction(raw_tx_bytes)
-                utils.info(f"Transaction decoded successfully:")
+                utils.info("Transaction decoded successfully:")
                 utils.info(f"  From: {decoded_tx.get('from')}")
                 utils.info(f"  To: {decoded_tx.get('to')}")
                 utils.info(f"  Nonce: {decoded_tx.get('nonce')}")
