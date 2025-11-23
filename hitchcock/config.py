@@ -207,26 +207,12 @@ def get_evm_private_key(network: Optional[str] = None) -> Optional[str]:
     Get EVM private key from environment variable.
 
     Args:
-        network: Optional network name (e.g., "ethereum", "polygon") for network-specific key
+        network: Optional network name (e.g., "ethereum", "polygon") - not used, kept for compatibility
 
     Returns:
         Private key string if found, None otherwise
     """
-    # Try network-specific key first if network is provided
-    if network:
-        network_key_map = {
-            "ethereum": "ETHEREUM",
-            "polygon": "POLYGON",
-            "bnb": "BSC_CHAIN",
-            "base": "BASE",
-        }
-        network_key = network_key_map.get(network.lower())
-        if network_key:
-            key = os.getenv(f"{network_key}_PRIVATE_KEY")
-            if key:
-                return key.strip()
-
-    # Fallback to general EVM private key
+    # Get general EVM private key
     key = os.getenv("EVM_PRIVATE_KEY")
     return key.strip() if key else None
 

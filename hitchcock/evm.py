@@ -986,6 +986,191 @@ def create_upgrade_to_transaction(
     )
 
 
+def create_bridge_transaction(
+    contract_address: str,
+    destination_address: str,
+    amount: Amount,
+    sender_privkey: str,
+    rpc_endpoint: str = "",
+) -> Dict[str, Any]:
+    """
+    Create and sign a bridge transaction to unwrap WPAC to PAC.
+
+    This function calls the bridge function on the WPAC contract which burns
+    WPAC tokens and triggers the unwrap process on Pactus blockchain.
+
+    The transaction is signed by the account holder (the person who owns the WPAC tokens),
+    not the contract owner.
+
+    Args:
+        contract_address: Address of the WPAC contract
+        destination_address: Pactus address (string) - parameter name in contract is pactusAddress
+        amount: Amount to unwrap as Amount object
+        sender_privkey: Private key of the account holder (hex format, with or without 0x)
+        rpc_endpoint: RPC endpoint URL
+
+    Returns:
+        Dictionary with contract_address, raw_transaction, and transaction_hash
+    """
+    if not sender_privkey:
+        raise ValueError("Sender private key is required")
+
+    # Bridge function ABI - calls bridge(pactusAddress, amount)
+    # Note: Fee is handled internally by the contract, not passed as parameter
+    bridge_abi = [
+        {
+            "constant": False,
+            "inputs": [
+                {"name": "pactusAddress", "type": "string"},
+                {"name": "value", "type": "uint256"},
+            ],
+            "name": "bridge",
+            "outputs": [],
+            "type": "function",
+        },
+    ]
+
+    w3 = _connect_web3(rpc_endpoint)
+
+    # Clean and validate private key
+    clean_privkey = sender_privkey[2:] if sender_privkey.startswith("0x") else sender_privkey
+    private_key_bytes = bytes.fromhex(clean_privkey)
+
+    if len(private_key_bytes) != 32:
+        raise ValueError("Private key must be 32 bytes (64 hex characters).")
+
+    # Derive account address from private key
+    account = Account.from_key(private_key_bytes)
+    sender_address = account.address
+
+    transaction = _build_contract_transaction(
+        w3,
+        contract_address,
+        sender_address,
+        bridge_abi,
+        lambda contract: contract.functions.bridge(destination_address, amount.value),
+    )
+
+    return _sign_transaction_payload(transaction, w3, contract_address, False, "", private_key_bytes)
+
+
+def create_native_transfer_transaction(
+    from_address: str,
+    to_address: str,
+    amount_wei: int,  # Amount in wei (native coin smallest unit)
+    sender_privkey: Optional[str] = None,
+    rpc_endpoint: str = "",
+    use_trezor: bool = False,
+    trezor_path: str = "",
+) -> Dict[str, Any]:
+    """
+    Create and sign a native coin transfer transaction (ETH, MATIC, BNB, etc.).
+
+    Args:
+        from_address: Address to send from (must match private key or Trezor address)
+        to_address: Address to send to
+        amount_wei: Amount to transfer in wei (native coin smallest unit)
+        sender_privkey: Private key of the sender (required if not using Trezor)
+        rpc_endpoint: RPC endpoint URL
+        use_trezor: Whether to use Trezor for signing
+        trezor_path: BIP44 derivation path for Trezor
+
+    Returns:
+        Dictionary with raw_transaction and transaction_hash
+    """
+    w3 = _connect_web3(rpc_endpoint)
+
+    # Get sender address and private key
+    if use_trezor:
+        if not trezor_path:
+            raise ValueError("Trezor derivation path is required when using Trezor")
+        try:
+            transport = get_transport()
+        except Exception as e:
+            raise ValueError(
+                f"Failed to connect to Trezor device: {e}\n"
+                "Please ensure your Trezor device is:\n"
+                "  - Connected via USB\n"
+                "  - Unlocked\n"
+                "  - Has the Ethereum app open (if using Trezor Model T)"
+            )
+        try:
+            ui = TrezorPINUI()
+            client = TrezorClient(transport, ui=ui)
+            address_n = tools.parse_path(trezor_path)
+            sender_address = ethereum.get_address(client, address_n, show_display=False)
+            sender_address = Web3.to_checksum_address(sender_address)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to get address from Trezor: {e}\n"
+                "Please ensure your Trezor device is unlocked and ready."
+            )
+        private_key_bytes = None
+    else:
+        if not sender_privkey:
+            raise ValueError("Private key is required when not using Trezor")
+        
+        # Clean and validate private key
+        clean_privkey = sender_privkey[2:] if sender_privkey.startswith("0x") else sender_privkey
+        clean_privkey = clean_privkey.strip()  # Remove any whitespace
+        
+        try:
+            private_key_bytes = bytes.fromhex(clean_privkey)
+        except ValueError as e:
+            raise ValueError(f"Invalid private key format: {e}. Private key must be hexadecimal.")
+        
+        if len(private_key_bytes) != 32:
+            raise ValueError("Private key must be 32 bytes (64 hex characters).")
+        
+        # Derive account address from private key
+        account = Account.from_key(private_key_bytes)
+        sender_address = account.address
+
+    # Verify from_address matches sender
+    if from_address.lower() != sender_address.lower():
+        raise ValueError(
+            f"From address ({from_address}) does not match the address derived from "
+            f"private key/Trezor ({sender_address})"
+        )
+
+    # Get current gas price and nonce
+    chain_id = w3.eth.chain_id
+    nonce = w3.eth.get_transaction_count(sender_address)
+    gas_price = w3.eth.gas_price
+
+    # Estimate gas for the transfer (simple transfer uses 21000 gas)
+    gas_limit = 21000
+
+    # Build transaction
+    transaction = {
+        "from": sender_address,
+        "to": Web3.to_checksum_address(to_address),
+        "value": amount_wei,
+        "nonce": nonce,
+        "gas": gas_limit,
+        "gasPrice": gas_price,
+        "chainId": chain_id,
+    }
+
+    # Sign transaction
+    if use_trezor:
+        signed_bytes = sign_transaction_with_trezor(transaction, trezor_path)
+        tx_hash = Web3.keccak(signed_bytes).hex()
+        raw_transaction = signed_bytes.hex()
+    else:
+        signed_txn = w3.eth.account.sign_transaction(transaction, private_key_bytes)
+        raw_transaction = signed_txn.raw_transaction.hex()
+        tx_hash = signed_txn.hash.hex()
+
+    return {
+        "raw_transaction": raw_transaction,
+        "transaction_hash": tx_hash,
+        "from": sender_address,
+        "to": to_address,
+        "amount_wei": amount_wei,
+    }
+
+
 def get_bridge_counter(contract_address: str, rpc_endpoint: str) -> int:
     """
     Get the counter value from the bridge contract.

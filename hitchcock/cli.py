@@ -6,6 +6,7 @@ import readline
 import sys
 from typing import Any, Callable, Dict, List, Tuple
 from pactus.types import Amount
+from web3 import Web3
 from hitchcock import config, evm, models, pactus, utils
 
 
@@ -371,8 +372,101 @@ class HitchcockCLI:
 
     def create_unwrap_transaction(self) -> None:
         """Create and sign an unwrap transaction (WPAC->PAC)."""
-        utils.warn("Unwrap transaction functionality not yet implemented.")
-        utils.warn("This will require EVM transaction (burning WPAC) to trigger Pactus transaction.")
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
+
+        print()
+        # Select source network (where WPAC contract is)
+        source_network = self.prompt_choice(
+            "Select source network (where WPAC is held)",
+            ["Ethereum", "Polygon", "BNB Smart Chain (BSC)", "Base"],
+        )
+
+        # Map network display name to network key
+        network_map = {
+            "Ethereum": "ethereum",
+            "Polygon": "polygon",
+            "BNB Smart Chain (BSC)": "bnb",
+            "Base": "base",
+        }
+        network_key = network_map.get(source_network)
+        if not network_key:
+            utils.warn("Invalid network selection.")
+            return
+
+        # Get WPAC contract address and RPC endpoint
+        contract_address = config.get_contract_address("wpac", network_key, env_key)
+        rpc_endpoint = config.get_rpc_endpoint(network_key, env_key)
+
+        if not contract_address or not rpc_endpoint:
+            utils.warn("Contract address or RPC endpoint not found.")
+            input("\nPress Enter to return to the main menu...")
+            return
+
+        print()
+        # Get sender's EVM private key
+        sender_privkey = config.get_evm_private_key(network_key)
+        if not sender_privkey:
+            sender_privkey = input("Enter EVM sender private key (hex format, with or without 0x): ").strip()
+
+        if not sender_privkey:
+            utils.warn("Sender private key is required.")
+            return
+
+        # Remove 0x prefix if present
+        if sender_privkey.startswith("0x"):
+            sender_privkey = sender_privkey[2:]
+
+        print()
+        dest_address = input("Enter destination Pactus address: ").strip()
+        if not dest_address:
+            utils.warn("Destination Pactus address is required.")
+            return
+
+        print()
+        amount_str = self.prompt_input("Enter amount in WPAC: ", "10.0")
+        try:
+            amount = Amount.from_string(amount_str)
+        except ValueError:
+            utils.warn(f"Invalid amount: {amount_str}. Using default 10.0 WPAC.")
+            amount = Amount.from_string("10.0")
+
+        try:
+            signed_tx = evm.create_bridge_transaction(
+                contract_address=contract_address,
+                destination_address=dest_address,
+                amount=amount,
+                sender_privkey=sender_privkey,
+                rpc_endpoint=rpc_endpoint,
+            )
+
+            print()
+            print(f"[Unwrap Transaction] {environment}")
+            print(f"Source Network: {source_network}")
+            print(f"Contract Address: {contract_address}")
+            print(f"Destination Pactus Address: {dest_address}")
+            print(f"Amount: {amount} WPAC")
+            print(f"Transaction Hash: {utils.bold_cyan(signed_tx['transaction_hash'])}")
+            print(f"Raw Transaction (hex): {signed_tx['raw_transaction']}")
+
+            # Ask if user wants to broadcast
+            print()
+            if self.prompt_confirm("Broadcast transaction to blockchain? (y/N): "):
+                try:
+                    result = evm.send_transaction(signed_tx['raw_transaction'], rpc_endpoint)
+                    print()
+                    utils.success("Transaction broadcast successfully!")
+                    print()
+                    if 'transactionHash' in result:
+                        print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(result['transactionHash'])}")
+                    else:
+                        print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(signed_tx['transaction_hash'])}")
+                except Exception as e:
+                    print(f"Error: {e}")
+        except Exception as e:
+            print(e)
+            return
+
         input("\nPress Enter to return to the main menu...")
 
     def administrator_menu(self) -> None:
@@ -1061,7 +1155,8 @@ class HitchcockCLI:
         tools_actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Query WPAC Balance", self.query_wpac_balance),
             "2": ("Dump All Bridges", self.dump_all_bridges),
-            "3": ("Administrator Menu", self.administrator_menu),
+            "3": ("Transfer Native Coin", self.transfer_native_coin),
+            "4": ("Administrator Menu", self.administrator_menu),
         }
 
         # Convert tools_actions to simple dict for menu display
@@ -1235,6 +1330,169 @@ class HitchcockCLI:
 
         except Exception as e:
             print(e)
+            return
+
+        input("\nPress Enter to return to WPAC Contract Tools menu...")
+
+    def transfer_native_coin(self) -> None:
+        """Transfer native coin (ETH, MATIC, BNB, etc.) from one address to another."""
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
+
+        print()
+        # Select network
+        network = self.prompt_choice(
+            "Select network",
+            ["Ethereum", "Polygon", "BNB Smart Chain (BSC)", "Base"],
+        )
+
+        # Map network display name to network key
+        network_map = {
+            "Ethereum": "ethereum",
+            "Polygon": "polygon",
+            "BNB Smart Chain (BSC)": "bnb",
+            "Base": "base",
+        }
+        network_key = network_map.get(network)
+        if not network_key:
+            utils.warn("Invalid network selection.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        # Get RPC endpoint
+        rpc_endpoint = config.get_rpc_endpoint(network_key, env_key)
+        if not rpc_endpoint:
+            utils.warn("RPC endpoint not found for the selected network.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        print()
+        from_address = input("Enter from address: ").strip()
+        if not from_address:
+            utils.warn("From address is required.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        # Show balance of from address
+        try:
+            w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+            if not w3.is_connected():
+                utils.warn("Failed to connect to RPC endpoint.")
+            else:
+                balance_wei = w3.eth.get_balance(Web3.to_checksum_address(from_address))
+                balance_ether = Web3.from_wei(balance_wei, "ether")
+                native_symbol = config.get_network_display_name(network_key)
+                print()
+                print(f"{utils.bold('Balance:')} {utils.bold_yellow(f'{balance_ether} {native_symbol}')}")
+        except Exception as e:
+            utils.warn(f"Failed to fetch balance: {e}")
+
+        print()
+        to_address = input("Enter to address: ").strip()
+        if not to_address:
+            utils.warn("To address is required.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        print()
+        amount_str = input("Enter amount (e.g., 0.1 for 0.1 ETH/MATIC/BNB): ").strip()
+        if not amount_str:
+            utils.warn("Amount is required.")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        try:
+            amount_float = float(amount_str)
+            # Convert to wei (1 ETH = 10^18 wei)
+            amount_wei = int(amount_float * 1_000_000_000_000_000_000)
+        except ValueError:
+            utils.warn(f"Invalid amount: {amount_str}")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
+            return
+
+        # Select signing method
+        print()
+        sign_method = self.prompt_choice(
+            "Select signing method",
+            ["Trezor Hardware Wallet", "Private Key"],
+        )
+
+        use_trezor = sign_method == "Trezor Hardware Wallet"
+        sender_privkey = None
+        trezor_path = config.get_trezor_derivation_path()
+
+        if use_trezor:
+            print()
+            trezor_path_input = input(f"Enter Trezor derivation path (default: {trezor_path}): ").strip()
+            if trezor_path_input:
+                trezor_path = trezor_path_input
+            print()
+            utils.info("Please connect and unlock your Trezor device...")
+        else:
+            print()
+            # Check .env first
+            sender_privkey = config.get_owner_private_key()
+            if not sender_privkey:
+                sender_privkey = input("Enter private key (hex format, with or without 0x): ").strip()
+            if not sender_privkey:
+                utils.warn("Private key is required.")
+                input("\nPress Enter to return to WPAC Contract Tools menu...")
+                return
+
+        try:
+            signed_tx = evm.create_native_transfer_transaction(
+                from_address=from_address,
+                to_address=to_address,
+                amount_wei=amount_wei,
+                sender_privkey=sender_privkey,
+                rpc_endpoint=rpc_endpoint,
+                use_trezor=use_trezor,
+                trezor_path=trezor_path,
+            )
+
+            print()
+            print(f"[Native Coin Transfer] {environment}")
+            print(f"Network: {network}")
+            print(f"From: {signed_tx['from']}")
+            print(f"To: {signed_tx['to']}")
+            print(f"Amount: {amount_str} {config.get_network_display_name(network_key)}")
+            print(f"Transaction Hash: {utils.bold_cyan(signed_tx['transaction_hash'])}")
+            print(f"Raw Transaction (hex): {signed_tx['raw_transaction']}")
+
+            # Ask if user wants to broadcast
+            print()
+            if self.prompt_confirm("Broadcast transaction to blockchain? (y/N): "):
+                try:
+                    result = evm.send_transaction(signed_tx['raw_transaction'], rpc_endpoint)
+                    print()
+                    utils.success("Transaction broadcast successfully!")
+                    print()
+                    if 'transactionHash' in result:
+                        print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(result['transactionHash'])}")
+                    else:
+                        print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(signed_tx['transaction_hash'])}")
+                except Exception as e:
+                    error_msg = str(e)
+                    print()
+                    utils.warn("Failed to broadcast transaction via RPC endpoint.")
+                    print()
+                    if "txpool disabled" in error_msg or "stateless" in error_msg.lower():
+                        print(utils.bold_yellow("⚠ RPC endpoint does not support sending transactions (stateless client)."))
+                        print()
+                        print("You can manually broadcast this transaction using:")
+                        print(f"  {utils.bold_cyan('Raw Transaction (hex):')}")
+                        print(f"  {signed_tx['raw_transaction']}")
+                        print()
+                        print("Options to broadcast:")
+                        print("  1. Use a different RPC endpoint that supports transactions")
+                        print("  2. Use a blockchain explorer's broadcast feature")
+                        print("  3. Use a wallet that supports raw transaction broadcasting")
+                    else:
+                        print(f"Error: {error_msg}")
+        except Exception as e:
+            print()
+            utils.warn(f"Failed to create transaction: {e}")
+            input("\nPress Enter to return to WPAC Contract Tools menu...")
             return
 
         input("\nPress Enter to return to WPAC Contract Tools menu...")
