@@ -163,8 +163,8 @@ def get_network_display_name(network: str) -> str:
 # Withdraw: unlocked/warm address for unwrapping WPAC
 WRAPTO_ADDRESSES: Dict[str, Dict[str, str]] = {
     "mainnet": {
-        "deposit": "pc1rgzu8c63my0cef7nyh8jntxnrvuvmzhpfpnxd6n",
-        "withdraw": "pc1rcr6v8v2s7rmm5m8c2dyaykr48ehwfcmxy69kva",
+        "deposit": "",
+        "withdraw": "",
     },
     "testnet": {
         "deposit": "tpc1rlqj68h3hm4nw9js3jpnl75kr8sfh79xkxt2lck",
