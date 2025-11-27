@@ -375,13 +375,6 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
                 "outputs": [{"name": "", "type": "address"}],
                 "type": "function",
             },
-            {
-                "constant": True,
-                "inputs": [],
-                "name": "FEE_COLLECTOR",
-                "outputs": [{"name": "", "type": "address"}],
-                "type": "function",
-            },
         ]
 
         contract = w3.eth.contract(
@@ -425,12 +418,6 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
         except Exception:
             info["minter"] = None
 
-        try:
-            fee_collector = contract.functions.FEE_COLLECTOR().call()
-            info["fee_collector"] = fee_collector
-        except Exception:
-            info["fee_collector"] = None
-
         # Resolve the implementation (logic) contract behind the proxy
         try:
             slot_value = w3.eth.get_storage_at(
@@ -469,28 +456,6 @@ def get_wpac_info(contract_address: str, rpc_endpoint: str) -> Dict[str, Any]:
             except Exception:
                 info["minter_balance"] = None
                 info["minter_balance_symbol"] = native_symbol
-
-        # Get fee collector balance
-        if info.get("fee_collector"):
-            try:
-                fee_collector_balance = w3.eth.get_balance(Web3.to_checksum_address(info["fee_collector"]))
-                info["fee_collector_balance"] = Web3.from_wei(fee_collector_balance, "ether")
-                info["fee_collector_balance_symbol"] = native_symbol
-            except Exception:
-                info["fee_collector_balance"] = None
-                info["fee_collector_balance_symbol"] = native_symbol
-
-        # Get collected fees (contract's own balance)
-        # According to the contract, fees are accumulated in the contract balance
-        # and can be withdrawn via withdrawFee() which transfers balanceOf(address(this))
-        try:
-            contract_balance = contract.functions.balanceOf(
-                Web3.to_checksum_address(contract_address)
-            ).call()
-            # Convert to human-readable format using fixed decimals
-            info["collected_fee"] = contract_balance / (10 ** config.WPAC_DECIMALS)
-        except Exception:
-            info["collected_fee"] = None
 
     except Exception as e:
         info["total_supply"] = None
@@ -890,38 +855,6 @@ def send_transaction(raw_transaction_hex: str, rpc_endpoint: str) -> Dict[str, A
         raise ValueError(f"Failed to send transaction: {e}")
 
 
-def create_set_fee_collector_transaction(
-    contract_address: str,
-    new_fee_collector: str,
-    owner_privkey: Optional[str] = None,
-    rpc_endpoint: str = "",
-    use_trezor: bool = False,
-    trezor_path: str = "",
-) -> Dict[str, Any]:
-    """Create and sign a transaction to set the fee collector address."""
-    wpac_abi = [
-        {
-            "constant": False,
-            "inputs": [{"name": "_feeCollectorAddress", "type": "address"}],
-            "name": "setFeeCollector",
-            "outputs": [],
-            "type": "function",
-        },
-    ]
-
-    collector_address = Web3.to_checksum_address(new_fee_collector)
-
-    return _create_admin_transaction(
-        contract_address=contract_address,
-        rpc_endpoint=rpc_endpoint,
-        owner_privkey=owner_privkey,
-        use_trezor=use_trezor,
-        trezor_path=trezor_path,
-        contract_abi=wpac_abi,
-        function_builder=lambda contract: contract.functions.setFeeCollector(collector_address),
-    )
-
-
 def create_transfer_ownership_transaction(
     contract_address: str,
     new_owner: str,
@@ -1109,19 +1042,19 @@ def create_native_transfer_transaction(
     else:
         if not sender_privkey:
             raise ValueError("Private key is required when not using Trezor")
-        
+
         # Clean and validate private key
         clean_privkey = sender_privkey[2:] if sender_privkey.startswith("0x") else sender_privkey
         clean_privkey = clean_privkey.strip()  # Remove any whitespace
-        
+
         try:
             private_key_bytes = bytes.fromhex(clean_privkey)
         except ValueError as e:
             raise ValueError(f"Invalid private key format: {e}. Private key must be hexadecimal.")
-        
+
         if len(private_key_bytes) != 32:
             raise ValueError("Private key must be 32 bytes (64 hex characters).")
-        
+
         # Derive account address from private key
         account = Account.from_key(private_key_bytes)
         sender_address = account.address

@@ -44,7 +44,6 @@ def test_evm_functions():
         assert callable(evm.derive_address_from_private_key)
         assert callable(evm.get_wpac_info)
         assert callable(evm.create_set_minter_transaction)
-        assert callable(evm.create_set_fee_collector_transaction)
         print("✓ EVM functions are callable")
         return True
     except Exception as e:

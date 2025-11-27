@@ -473,9 +473,8 @@ class HitchcockCLI:
         """Administrator menu for WPAC contract management."""
         admin_actions: Dict[str, Tuple[str, Callable[[], None]]] = {
             "1": ("Set Minter Address", self.set_minter_address),
-            "2": ("Set Fee Collector Address", self.set_fee_collector_address),
-            "3": ("Transfer Ownership", self.transfer_ownership),
-            "4": ("Upgrade Proxy Implementation", self.upgrade_proxy_implementation),
+            "2": ("Transfer Ownership", self.transfer_ownership),
+            "3": ("Upgrade Proxy Implementation", self.upgrade_proxy_implementation),
         }
 
         # Convert admin_actions to simple dict for menu display
@@ -595,123 +594,6 @@ class HitchcockCLI:
                 trezor_path=trezor_path,
             )
             self.print_signed_admin_transaction(signed_tx, network, environment, "Set Minter", new_minter)
-
-            # Ask if user wants to send the transaction
-            print()
-            if self.prompt_confirm("Send transaction to blockchain? (y/N): "):
-                try:
-                    result = evm.send_transaction(signed_tx["raw_transaction"], rpc_endpoint)
-                    print()
-                    utils.success("Transaction sent successfully!")
-                    print()
-                    print(f"{utils.bold('Transaction Hash:')} {utils.bold_cyan(result['transaction_hash'])}")
-                    if "block_number" in result:
-                        print(f"{utils.bold('Block Number:')} {result['block_number']}")
-                        status_text = "Success" if result['status'] == 1 else "Failed"
-                        status_color = utils.bold_green if result['status'] == 1 else utils.bold_red
-                        print(f"{utils.bold('Status:')} {status_color(status_text)}")
-                        print(f"{utils.bold('Gas Used:')} {result['gas_used']}")
-                except Exception as e:
-                    print(e)
-            else:
-                utils.info("Transaction not sent. You can send it manually using the raw transaction hex above.")
-        except Exception as e:
-            print(e)
-            return
-
-        input("\nPress Enter to return to administrator menu...")
-
-    def set_fee_collector_address(self) -> None:
-        """Set the fee collector address for a WPAC contract."""
-        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
-        env_key = self.environment
-
-        # Get available WPAC contracts
-        contract_options = []
-        contract_map = {}
-        contract_name = "wpac"
-
-        for network in config.list_networks():
-            address = config.get_contract_address(contract_name, network, env_key)
-            if address:
-                display_name = f"WPAC on {config.get_network_display_name(network)}"
-                contract_options.append(display_name)
-                contract_map[display_name] = (contract_name, network)
-
-        if not contract_options:
-            utils.warn("No contracts found for the selected environment.")
-            input("\nPress Enter to return to administrator menu...")
-            return
-
-        selected_display = self.prompt_choice("Select contract", contract_options)
-        contract_name, network = contract_map[selected_display]
-
-        contract_address = config.get_contract_address(contract_name, network, env_key)
-        rpc_endpoint = config.get_rpc_endpoint(network, env_key)
-
-        if not contract_address or not rpc_endpoint:
-            utils.warn("Contract address or RPC endpoint not found.")
-            input("\nPress Enter to return to administrator menu...")
-            return
-
-        # Fetch current fee collector address
-        try:
-            contract_info = evm.get_wpac_info(contract_address, rpc_endpoint)
-            current_fee_collector = contract_info.get("fee_collector")
-            print()
-            if current_fee_collector:
-                print(utils.bold_yellow(f"Current Fee Collector Address: {current_fee_collector}"))
-            else:
-                utils.warn("Could not fetch current fee collector address.")
-        except Exception as e:
-            print(e)
-
-        print()
-        new_fee_collector = input("Enter new fee collector address: ").strip()
-        if not new_fee_collector:
-            utils.warn("Fee collector address is required.")
-            input("\nPress Enter to return to administrator menu...")
-            return
-
-        # Offer Trezor signing option for both Mainnet and Testnet
-        use_trezor = False
-        owner_privkey = None
-        trezor_path = config.get_trezor_derivation_path()
-
-        print()
-        sign_method = self.prompt_choice(
-            "Select signing method",
-            ["Trezor Hardware Wallet", "Private Key"],
-        )
-        if sign_method == "Trezor Hardware Wallet":
-            use_trezor = True
-            print()
-            trezor_path_input = input(f"Enter Trezor derivation path (default: {trezor_path}): ").strip()
-            if trezor_path_input:
-                trezor_path = trezor_path_input
-            print()
-            utils.info("Please connect and unlock your Trezor device...")
-        else:
-            print()
-            # Check .env first
-            owner_privkey = config.get_owner_private_key()
-            if not owner_privkey:
-                owner_privkey = input("Enter owner private key (hex format, with or without 0x): ").strip()
-            if not owner_privkey:
-                utils.warn("Owner private key is required.")
-                input("\nPress Enter to return to administrator menu...")
-                return
-
-        try:
-            signed_tx = evm.create_set_fee_collector_transaction(
-                contract_address,
-                new_fee_collector,
-                owner_privkey,
-                rpc_endpoint,
-                use_trezor=use_trezor,
-                trezor_path=trezor_path,
-            )
-            self.print_signed_admin_transaction(signed_tx, network, environment, "Set Fee Collector", new_fee_collector)
 
             # Ask if user wants to send the transaction
             print()
@@ -986,8 +868,6 @@ class HitchcockCLI:
         # Determine label based on action
         if "Minter" in action:
             label = "New Minter Address:"
-        elif "Fee Collector" in action:
-            label = "New Fee Collector Address:"
         elif "Implementation" in action:
             label = "New Implementation Address:"
         else:
@@ -1127,28 +1007,11 @@ class HitchcockCLI:
         else:
             print("Minter: N/A")
 
-        if "fee_collector" in contract_info and contract_info["fee_collector"]:
-            fee_collector_addr = contract_info["fee_collector"]
-            if "fee_collector_balance" in contract_info and contract_info["fee_collector_balance"] is not None:
-                symbol = contract_info.get("fee_collector_balance_symbol", "ETH")
-                balance = contract_info["fee_collector_balance"]
-                print(f"Fee Collector: {fee_collector_addr} ({balance:.6f} {symbol})")
-            else:
-                print(f"Fee Collector: {fee_collector_addr} (Balance: N/A)")
-        else:
-            print("Fee Collector: N/A")
-
         print()
 
         if "total_supply" in contract_info and contract_info["total_supply"] is not None:
             # Use fixed decimals from config
             print(f"Total Supply: {contract_info['total_supply']:.{config.WPAC_DECIMALS}f} WPAC")
-
-        if "collected_fee" in contract_info and contract_info["collected_fee"] is not None:
-            # Use fixed decimals from config
-            print(f"Collected Fee: {contract_info['collected_fee']:.{config.WPAC_DECIMALS}f} WPAC")
-        else:
-            print("Collected Fee: N/A")
 
     def wpac_contract_tools_menu(self) -> None:
         """WPAC Contract Tools menu - combines query, dump, and admin functions."""
@@ -1226,14 +1089,31 @@ class HitchcockCLI:
             input("\nPress Enter to return to WPAC Contract Tools menu...")
             return
 
+        native_balance_display = None
+
         try:
             balance: Amount = evm.get_wpac_balance(contract_address, address_to_query, rpc_endpoint)
+
+            # Fetch native coin balance for the same address
+            try:
+                w3 = Web3(Web3.HTTPProvider(rpc_endpoint))
+                if w3.is_connected():
+                    native_balance_wei = w3.eth.get_balance(Web3.to_checksum_address(address_to_query))
+                    native_balance = Web3.from_wei(native_balance_wei, "ether")
+                    native_symbol = config.get_native_token_symbol(network)
+                    native_balance_display = f"{native_balance:.6f} {native_symbol}"
+            except Exception as balance_error:
+                utils.warn(f"Failed to fetch native balance: {balance_error}")
+
             print()
             print(utils.bold_cyan(f"[WPAC Balance] {config.get_network_display_name(network)} ({environment})"))
             print()
             print(f"{utils.bold('Contract Address:')} {contract_address}")
             print(f"{utils.bold('Query Address:')} {address_to_query}")
-            print(f"{utils.bold('Balance:')} {utils.bold_yellow(f'{balance} WPAC')}")
+            balance_text = f"{balance} WPAC"
+            if native_balance_display:
+                balance_text = f"{balance_text} ({native_balance_display})"
+            print(f"{utils.bold('Balance:')} {utils.bold_yellow(balance_text)}")
         except Exception as e:
             utils.error(f"Failed to query balance: {e}")
             print(e)

@@ -24,7 +24,7 @@ CONTRACTS: Dict[str, Dict[str, Dict[str, str]]] = {
     "wpac": {
         "ethereum": {
             "testnet": "0xa19cE2a5855bfef29EEE8781E3e6E55BCB039C91",
-            "mainnet": "",
+            "mainnet": "0x55a2f45C72656BC205B42F07416d5E1bE2c68745",
         },
         "polygon": {
             "testnet": "0x1F9EcDf71DDb39022728B53f5584621762e466be",  # Polygon Amoy
@@ -156,6 +156,25 @@ def get_network_display_name(network: str) -> str:
         "ethereum": "Ethereum",
     }
     return network_display_map.get(network.lower(), network.capitalize())
+
+
+def get_native_token_symbol(network: str) -> str:
+    """
+    Get the native token symbol for a given EVM network.
+
+    Args:
+        network: Network key (e.g., "bnb", "polygon", "base", "ethereum")
+
+    Returns:
+        Symbol string such as "ETH", "MATIC", or "BNB"
+    """
+    symbol_map = {
+        "ethereum": "ETH",
+        "polygon": "MATIC",
+        "bnb": "BNB",
+        "base": "ETH",
+    }
+    return symbol_map.get(network.lower(), network.upper())
 
 
 # Pactus Wrapto addresses (deposit and withdraw)
