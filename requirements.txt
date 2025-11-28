@@ -3,3 +3,4 @@ eth-account>=0.13.7
 python-dotenv>=1.0.0
 web3>=6.0.0
 trezor>=0.13.0
+requests>=2.31.0

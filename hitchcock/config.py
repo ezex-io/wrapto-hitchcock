@@ -241,3 +241,29 @@ def get_owner_private_key() -> Optional[str]:
     key = os.getenv("OWNER_PRIVATE_KEY")
     return key.strip() if key else None
 
+
+def get_http_admin_admin_token() -> Optional[str]:
+    """Get admin token from environment variable (for wrapto backend API)."""
+    key = os.getenv("WRAPTO_HTTP_ADMIN_TOKEN")
+    return key.strip() if key else None
+
+
+# Wrapto backend API endpoints
+WRAPTO_BACKEND_API: Dict[str, str] = {
+    "mainnet": get_env("WRAPTO_BACKEND_API_MAINNET", "https://api.wrapto.app"),
+    "testnet": get_env("WRAPTO_BACKEND_API_TESTNET", "https://api-beta.wrapto.app"),
+}
+
+
+def get_wrapto_backend_api(environment: str = "mainnet") -> str:
+    """
+    Get Wrapto backend API URL for a given environment.
+
+    Args:
+        environment: Environment type ("testnet" or "mainnet")
+
+    Returns:
+        Wrapto backend API URL as string
+    """
+    return WRAPTO_BACKEND_API.get(environment, WRAPTO_BACKEND_API["mainnet"])
+

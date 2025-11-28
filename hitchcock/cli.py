@@ -7,6 +7,7 @@ import sys
 from typing import Any, Callable, Dict, List, Tuple
 from pactus.types import Amount
 from web3 import Web3
+import requests
 from hitchcock import config, evm, models, pactus, utils
 
 
@@ -475,6 +476,7 @@ class HitchcockCLI:
             "1": ("Set Minter Address", self.set_minter_address),
             "2": ("Transfer Ownership", self.transfer_ownership),
             "3": ("Upgrade Proxy Implementation", self.upgrade_proxy_implementation),
+            "4": ("Reprocess Failed Orders", self.reprocess_failed_orders),
         }
 
         # Convert admin_actions to simple dict for menu display
@@ -853,6 +855,77 @@ class HitchcockCLI:
         except Exception as e:
             print(e)
             return
+
+        input("\nPress Enter to return to administrator menu...")
+
+    def reprocess_failed_orders(self) -> None:
+        """Reprocess a failed order by calling the wrapto backend API."""
+        environment = "Mainnet" if self.environment == "mainnet" else "Testnet"
+        env_key = self.environment
+
+        print()
+        # Check .env first
+        admin_token = config.get_http_admin_admin_token()
+        if not admin_token:
+            admin_token = input("Enter admin token: ").strip()
+
+        if not admin_token:
+            utils.warn("Admin token is required.")
+            input("\nPress Enter to return to administrator menu...")
+            return
+
+        print()
+        order_id = input("Enter order ID: ").strip()
+        if not order_id:
+            utils.warn("Order ID is required.")
+            input("\nPress Enter to return to administrator menu...")
+            return
+
+        # Get the backend API URL
+        api_base_url = config.get_wrapto_backend_api(env_key)
+        api_url = f"{api_base_url}/admin/rescan/{order_id}"
+
+        print()
+        utils.info(f"Calling API: {api_url}")
+        print()
+
+        try:
+            headers = {
+                "X-ADMIN-TOKEN": admin_token,
+            }
+
+            response = requests.get(api_url, headers=headers, timeout=30)
+
+            print()
+            print(utils.bold_cyan(f"[Reprocess Failed Order] {environment}"))
+            print()
+            print(f"{utils.bold('Order ID:')} {order_id}")
+            print(f"{utils.bold('API URL:')} {api_url}")
+            print(f"{utils.bold('Status Code:')} {response.status_code}")
+
+            if response.status_code == 200:
+                utils.success("Order reprocessing initiated successfully!")
+                try:
+                    response_data = response.json()
+                    print()
+                    print(f"{utils.bold('Response:')}")
+                    print(response_data)
+                except ValueError:
+                    print()
+                    print(f"{utils.bold('Response:')} {response.text}")
+            else:
+                utils.warn(f"API call failed with status code {response.status_code}")
+                print()
+                print(f"{utils.bold('Response:')} {response.text}")
+
+        except requests.exceptions.RequestException as e:
+            utils.error(f"Failed to call API: {e}")
+            print()
+            print(f"Error details: {str(e)}")
+        except Exception as e:
+            utils.error(f"Unexpected error: {e}")
+            print()
+            print(f"Error details: {str(e)}")
 
         input("\nPress Enter to return to administrator menu...")
 
