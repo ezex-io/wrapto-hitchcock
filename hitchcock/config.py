@@ -182,8 +182,8 @@ def get_native_token_symbol(network: str) -> str:
 # Withdraw: unlocked/warm address for unwrapping WPAC
 WRAPTO_ADDRESSES: Dict[str, Dict[str, str]] = {
     "mainnet": {
-        "deposit": "",
-        "withdraw": "",
+        "deposit": "pc1rca8ux3jm74r5nydqmmk0jvyfa4fg0f49vzytku",
+        "withdraw": "pc1r3t7pshkwl63z4gpt32lxc9qfk698409kklsv32",
     },
     "testnet": {
         "deposit": "tpc1rlqj68h3hm4nw9js3jpnl75kr8sfh79xkxt2lck",
